@@ -181,13 +181,7 @@
           <h3>After Gemma's patch</h3>
         </header>
         <pre class="yaml" id="patchedPolicy"></pre>
-        <p class="policy-note">
-          <code>positions</code> is pinned by the recorded site list (three sites
-          became five). <code>substitutions_per_position</code> is known to have
-          risen from Gemma's own rationale, but its exact value lived only in
-          <code>logs/</code>, which is gitignored — so it is left unfilled rather
-          than guessed.
-        </p>
+        <p class="policy-note" id="policyNote"></p>
         <ul class="round-facts" id="patchedFacts"></ul>
       </article>
     </div>
@@ -209,8 +203,101 @@
   </section>
 
   <!-- ------------------------------------------------------------------ -->
+  <section id="editor">
+    <h2><span class="num">4</span> Rewrite the policy yourself</h2>
+    <p class="section-lede">
+      This is Gemma's job, and it is the one part of the pipeline that is pure
+      arithmetic — no model. The controls below drive the project's real
+      interpreter, ported to the browser from
+      <code>src/agent/policy_interpreter.py</code>: the same min-max feature
+      normalisation, the same tie-breaking toward lower indices, the same
+      residue-class filter and edit budget. It runs against the grounded state of
+      the corrupted 1PGB input, so nothing needs downloading.
+    </p>
+
+    <div class="editor-grid">
+      <div class="editor-controls">
+        <h3>position_score <span class="hint">weights must sum to 1.0</span></h3>
+        <div id="weightControls"></div>
+
+        <h3 class="mt">proposal</h3>
+        <div id="proposalControls"></div>
+
+        <div class="editor-actions">
+          <button class="btn" id="resetSeed">Reset to seed policy</button>
+          <button class="btn" id="applyGemma">Apply Gemma's patch</button>
+        </div>
+        <div id="policyStatus" class="policy-status"></div>
+      </div>
+
+      <div class="editor-results">
+        <div class="result-head">
+          <h3>What the agent would search</h3>
+          <div id="editorSummary" class="result-summary"></div>
+        </div>
+        <div id="siteTrack" class="site-track"></div>
+        <div id="candidateList" class="candidate-list"></div>
+        <p class="metrics-note" id="preRankNote"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section id="own">
+    <h2><span class="num">5</span> Score your own sequence</h2>
+    <p class="section-lede">
+      ESM-2 runs <strong>in your browser</strong> — the ONNX build of
+      <code>facebook/esm2_t12_35M_UR50D</code>, the same scorer the Python path
+      uses. Paste any protein and it gets the identical masked-marginal
+      treatment that flagged the fold-breaking proline at position 50 without
+      ever seeing a reference structure.
+    </p>
+
+    <aside class="notice compact">
+      <p>
+        <strong>What this does not do.</strong> It does not predict a structure.
+        Folding is ESMFold, a different 8.4&nbsp;GB model, so a sequence you paste
+        gets sequence-plausibility signals and the policy search that runs on
+        them — and no TM-score, no contact recovery and no hidden score, because
+        all three require a fold and a reference crystal structure to score
+        against. Those exist on this page only for 1PGB, where both are committed.
+      </p>
+    </aside>
+
+    <div class="own-input">
+      <label for="seqInput" class="own-label">Protein sequence (FASTA or raw, 10–400 residues)</label>
+      <textarea id="seqInput" spellcheck="false" rows="4"
+        placeholder="MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"></textarea>
+      <div class="own-actions">
+        <button class="btn" id="fillCorrupt">Use corrupted 1PGB</button>
+        <button class="btn" id="fillNative">Use native 1PGB</button>
+        <button class="btn primary" id="runEsm">Run ESM-2</button>
+      </div>
+      <div id="seqStatus" class="seq-status"></div>
+      <div id="esmProgress" class="progress" hidden><div class="progress-bar"></div></div>
+    </div>
+
+    <div id="ownResults" hidden>
+      <div id="ownProvenance" class="own-provenance"></div>
+      <h3 class="mt">Per-residue surprisal</h3>
+      <p class="section-lede">
+        −log p of the residue actually present, under the masked-marginal
+        estimator. High means "the model did not expect this residue here".
+      </p>
+      <div id="ownSurprisal" class="plddt-chart"></div>
+
+      <h3 class="mt">Substitution map</h3>
+      <p class="section-lede" id="heatmapCaption"></p>
+      <div id="ownHeatmap" class="heatmap-wrap"></div>
+
+      <h3 class="mt">Policy search on your sequence</h3>
+      <div id="ownSearch"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
   <section id="run">
-    <h2><span class="num">4</span> Running it for real</h2>
+    <h2><span class="num">6</span> Running it for real</h2>
     <p class="section-lede">
       The live pipeline runs locally. It needs the ESMFold checkpoint and Ollama;
       the fold cache ships with the repository so the demo does not re-fold.
@@ -248,6 +335,6 @@ ollama pull gemma4:12b
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"></script>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

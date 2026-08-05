@@ -8,6 +8,9 @@
 
 'use strict';
 
+import * as pol from './policy.js';
+import * as esm from './esm.js';
+
 const STAGE_COLOUR = {
   corrupted: '#f87171',
   baseline:  '#5eb0ef',
@@ -48,17 +51,29 @@ async function boot() {
   }
 
   state.data = data;
-  renderBadges();
-  renderSequences();
-  renderCorruptTable();
-  renderViewerControls();
-  renderMetricTabs();
-  renderMetrics();
-  renderPlddt();
-  renderPolicies();
-  renderQuote();
-  renderScoreBars();
-  initViewer();
+
+  // Each step is independent, so one failure should not silently truncate the
+  // page at whatever rendered last. Report it where it happened and continue.
+  const steps = [
+    ['badges', renderBadges], ['sequences', renderSequences],
+    ['corruption table', renderCorruptTable], ['viewer controls', renderViewerControls],
+    ['metric tabs', renderMetricTabs], ['metrics', renderMetrics],
+    ['pLDDT chart', renderPlddt], ['policies', renderPolicies],
+    ['quote', renderQuote], ['score bars', renderScoreBars],
+    ['viewer', initViewer], ['policy editor', initEditor],
+    ['sequence input', initOwnSequence],
+  ];
+  const failed = [];
+  for (const [name, fn] of steps) {
+    try { fn(); } catch (err) { failed.push(`${name}: ${err.message}`); console.error(name, err); }
+  }
+  if (failed.length) {
+    document.querySelector('.wrap').insertAdjacentHTML(
+      'afterbegin',
+      `<div class="notice"><h2>Some sections failed to render</h2>
+       <ul class="legend">${failed.map((f) => `<li><code>${f}</code></li>`).join('')}</ul></div>`
+    );
+  }
 }
 
 /* ------------------------------------------------------------------ hero */
@@ -406,16 +421,35 @@ function renderPolicies() {
   $('patchedPolicy').innerHTML = policyYaml(patched, seed);
 
   const rec = d.recorded;
+  const it = d.interpreter;
+  // Sites and proposal counts are recomputed by the interpreter at build time
+  // and asserted equal to DEMO.md, so they are tagged computed. Which candidate
+  // won, and its hidden score, come from the withheld evaluator and stay recorded.
   const facts = (which) => {
-    const sites = rec.sites_1based[which];
+    const sites = it ? it[which].sites_1based : null;
+    const proposals = it ? it[which].proposals : null;
     return `
-      <li><span>sites selected</span><b>[${sites.join(', ')}]</b></li>
-      <li><span>mutations proposed</span><b>${rec.proposals[which]}</b></li>
-      <li><span>picked</span><b>${rec.picked[which]}</b></li>
-      <li><span>hidden score</span><b>${fmt(rec.hidden_score[which], 4)}</b></li>`;
+      <li><span>sites selected <span class="tag tag-computed sm">computed</span></span><b>${sites ? `[${sites.join(', ')}]` : '—'}</b></li>
+      <li><span>mutations proposed <span class="tag tag-computed sm">computed</span></span><b>${proposals ?? '—'}</b></li>
+      <li><span>picked <span class="tag tag-recorded sm">recorded</span></span><b>${rec.picked[which]}</b></li>
+      <li><span>hidden score <span class="tag tag-recorded sm">recorded</span></span><b>${fmt(rec.hidden_score[which], 4)}</b></li>`;
   };
   $('baselineFacts').innerHTML = facts('baseline');
   $('patchedFacts').innerHTML = facts('patched');
+
+  if (it) {
+    const spp = it.patched.substitutions_per_position_recovered;
+    const all = it.patched.substitutions_per_position_all_matches || [];
+    $('policyNote').innerHTML =
+      `<code>positions</code> is pinned by the recorded site list (three sites became
+       five). <code>substitutions_per_position</code> was not written down anywhere —
+       <code>logs/</code> is gitignored — so it is <em>recovered</em>: re-running the real
+       interpreter across the DSL's legal range,
+       <b>${spp}</b> is the smallest value that reproduces the recorded
+       ${it.patched.proposals} proposals${all.length > 1
+        ? ` (the residue-class filter saturates, so ${all.length > 2 ? `${all[0]}–${all[all.length - 1]}` : all.join(' and ')} all give the same count)`
+        : ''}.`;
+  }
 }
 
 function renderQuote() {
@@ -460,4 +494,516 @@ function renderScoreBars() {
     </p>`;
 }
 
-document.addEventListener('DOMContentLoaded', boot);
+/* ================================================================== editor
+ * The policy editor runs the ported interpreter against the committed grounded
+ * state of corrupted 1PGB. No model, no download — the interpreter is pure
+ * arithmetic, which is the whole reason this is possible client-side.
+ * ================================================================== */
+
+const FEATURE_LABELS = {
+  esm_surprisal: 'ESM surprisal',
+  low_plddt: 'low pLDDT',
+  contact_violation: 'contact violation',
+  long_range_contact_violation: 'long-range contact violation',
+};
+
+const editor = { policy: null, state: null, matrix: null, sequence: null };
+
+function initEditor() {
+  const d = state.data;
+  if (!d.interpreter || !d.esm) {
+    $('editor').innerHTML =
+      '<h2><span class="num">4</span> Rewrite the policy yourself</h2>' +
+      '<p class="section-lede">This bundle was generated without ESM-2 data ' +
+      '(<code>--allow-missing-esm</code>), so the interpreter cannot run here. ' +
+      'Regenerate with <code>python scripts/build_web_data.py</code>.</p>';
+    return;
+  }
+
+  editor.sequence = d.stages.corrupted.sequence;
+  editor.matrix = d.esm.matrices.corrupted;
+  editor.state = { sequence_length: editor.sequence.length, residues: d.interpreter.state.residues };
+  editor.policy = JSON.parse(JSON.stringify(d.policy.seed));
+
+  const feats = d.policy.schema.scorable_features;
+  $('weightControls').innerHTML = feats
+    .map((f) => {
+      const v = editor.policy.position_score[f] ?? 0;
+      return `<div class="ctl">
+        <label for="w_${f}">${FEATURE_LABELS[f]}
+          ${f === 'long_range_contact_violation' ? '<span class="hint">unused by the seed policy</span>' : ''}
+        </label>
+        <input type="range" id="w_${f}" data-feature="${f}" min="0" max="1" step="0.05" value="${v}" />
+        <output id="o_${f}">${v.toFixed(2)}</output>
+      </div>`;
+    })
+    .join('');
+
+  const p = editor.policy.proposal;
+  const sc = d.policy.schema;
+  $('proposalControls').innerHTML = `
+    <div class="ctl">
+      <label for="p_positions">positions</label>
+      <input type="range" id="p_positions" min="${sc.positions[0]}" max="${sc.positions[1]}" step="1" value="${p.positions}" />
+      <output id="o_positions">${p.positions}</output>
+    </div>
+    <div class="ctl">
+      <label for="p_spp">substitutions per position</label>
+      <input type="range" id="p_spp" min="${sc.substitutions_per_position[0]}" max="${sc.substitutions_per_position[1]}" step="1" value="${p.substitutions_per_position}" />
+      <output id="o_spp">${p.substitutions_per_position}</output>
+    </div>
+    <div class="ctl">
+      <label for="p_edits">max total edits</label>
+      <input type="range" id="p_edits" min="${sc.max_total_edits[0]}" max="${sc.max_total_edits[1]}" step="1" value="${p.max_total_edits}" />
+      <output id="o_edits">${p.max_total_edits}</output>
+    </div>
+    <div class="ctl checkbox">
+      <label class="toggle"><input type="checkbox" id="p_class" ${p.preserve_residue_class ? 'checked' : ''} />
+        <span>preserve residue class</span></label>
+    </div>`;
+
+  $('editor').addEventListener('input', (e) => {
+    const t = e.target;
+    if (t.dataset && t.dataset.feature) {
+      editor.policy.position_score[t.dataset.feature] = Number(t.value);
+      $(`o_${t.dataset.feature}`).textContent = Number(t.value).toFixed(2);
+    } else if (t.id === 'p_positions') {
+      editor.policy.proposal.positions = Number(t.value);
+      $('o_positions').textContent = t.value;
+    } else if (t.id === 'p_spp') {
+      editor.policy.proposal.substitutions_per_position = Number(t.value);
+      $('o_spp').textContent = t.value;
+    } else if (t.id === 'p_edits') {
+      editor.policy.proposal.max_total_edits = Number(t.value);
+      $('o_edits').textContent = t.value;
+    } else if (t.id === 'p_class') {
+      editor.policy.proposal.preserve_residue_class = t.checked;
+    } else return;
+    renderEditor();
+  });
+
+  $('resetSeed').addEventListener('click', () => setEditorPolicy(d.policy.seed));
+  $('applyGemma').addEventListener('click', () => setEditorPolicy(d.policy.patched));
+
+  renderEditor();
+}
+
+function setEditorPolicy(policy) {
+  editor.policy = JSON.parse(JSON.stringify(policy));
+  for (const [f, v] of Object.entries(editor.policy.position_score)) {
+    const el = $(`w_${f}`);
+    if (el) { el.value = v; $(`o_${f}`).textContent = Number(v).toFixed(2); }
+  }
+  for (const f of state.data.policy.schema.scorable_features) {
+    if (!(f in editor.policy.position_score)) {
+      const el = $(`w_${f}`);
+      if (el) { el.value = 0; $(`o_${f}`).textContent = '0.00'; }
+    }
+  }
+  const p = editor.policy.proposal;
+  $('p_positions').value = p.positions; $('o_positions').textContent = p.positions;
+  $('p_spp').value = p.substitutions_per_position; $('o_spp').textContent = p.substitutions_per_position;
+  $('p_edits').value = p.max_total_edits; $('o_edits').textContent = p.max_total_edits;
+  $('p_class').checked = p.preserve_residue_class;
+  renderEditor();
+}
+
+/** Drop zero weights so the DSL sees only features it is actually scoring. */
+function activePolicy(policy) {
+  const ps = {};
+  for (const [k, v] of Object.entries(policy.position_score)) if (v > 0) ps[k] = v;
+  return { position_score: ps, proposal: { ...policy.proposal } };
+}
+
+function renderEditor() {
+  const d = state.data;
+  const policy = activePolicy(editor.policy);
+  const sum = Object.values(policy.position_score).reduce((s, v) => s + v, 0);
+
+  try {
+    pol.validatePolicy(policy);
+  } catch (err) {
+    $('policyStatus').innerHTML =
+      `<div class="invalid"><strong>Policy rejected.</strong> ${err.message}
+       ${Math.abs(sum - 1) > pol.WEIGHT_SUM_TOLERANCE && sum > 0
+        ? `<button class="btn tiny" id="normaliseBtn">Normalise to 1.0</button>` : ''}
+       <span class="invalid-note">The interpreter is never handed an invalid policy —
+       it is rejected, not coerced. This is the same check
+       <code>src/agent/policy.py::validate_policy</code> runs on Gemma's output.</span></div>`;
+    const nb = $('normaliseBtn');
+    if (nb) nb.addEventListener('click', () => {
+      const scaled = {};
+      for (const [k, v] of Object.entries(policy.position_score)) scaled[k] = Math.round((v / sum) * 1e6) / 1e6;
+      editor.policy.position_score = { ...editor.policy.position_score, ...scaled };
+      setEditorPolicy(editor.policy);
+    });
+    $('editorSummary').innerHTML = '';
+    $('siteTrack').innerHTML = '';
+    $('candidateList').innerHTML = '';
+    $('preRankNote').textContent = '';
+    return;
+  }
+
+  $('policyStatus').innerHTML =
+    `<div class="valid">Policy valid — weights sum to 1.0 and every scored feature exists in the grounded state.</div>`;
+
+  const sites = pol.selectPositions(policy, editor.state);
+  const cands = pol.enumerateCandidates(policy, editor.state, editor.sequence, (s, p, n) =>
+    esm.substitutionRanking(editor.matrix, s, p, n)
+  );
+
+  const seedSites = d.interpreter.baseline.sites_1based.join(',');
+  const patchedSites = d.interpreter.patched.sites_1based.join(',');
+  const nowSites = sites.map((p) => p + 1).join(',');
+  let match = '';
+  if (nowSites === seedSites && cands.length === d.interpreter.baseline.proposals) {
+    match = '<span class="match-tag">matches the recorded round 1</span>';
+  } else if (nowSites === patchedSites && cands.length === d.interpreter.patched.proposals) {
+    match = '<span class="match-tag">matches the recorded round 2</span>';
+  }
+
+  $('editorSummary').innerHTML =
+    `<b>${sites.length}</b> sites · <b>${cands.length}</b> mutations proposed ${match}`;
+
+  const corrupted = new Set(d.corruptions.map((c) => c.position));
+  const selected = new Set(sites);
+  $('siteTrack').innerHTML =
+    `<div class="track-label">selected positions along the chain</div>` +
+    `<div class="track">` +
+    [...editor.sequence]
+      .map((aa, i) => {
+        const cls = selected.has(i) ? 'sel' : corrupted.has(i) ? 'cor' : '';
+        return `<span class="tick ${cls}" data-pos="${aa}${i + 1}"></span>`;
+      })
+      .join('') +
+    `</div>` +
+    `<div class="track-key">
+       <span><i class="sw sw-sel"></i> selected by this policy</span>
+       <span><i class="sw sw-cor"></i> actually corrupted (withheld from the agent)</span>
+       <span class="track-hit">${sites.filter((s) => corrupted.has(s)).length} of ${sites.length} selected sites are genuinely damaged</span>
+     </div>`;
+
+  const byPos = new Map();
+  for (const c of cands) {
+    if (!byPos.has(c.position)) byPos.set(c.position, []);
+    byPos.get(c.position).push(c);
+  }
+  $('candidateList').innerHTML = sites
+    .map((p) => {
+      const list = byPos.get(p) || [];
+      const hit = corrupted.has(p);
+      return `<div class="cand-group">
+        <div class="cand-head">
+          <span class="cand-pos">${editor.sequence[p]}${p + 1}</span>
+          <span class="cand-meta">${list.length} substitution${list.length === 1 ? '' : 's'}${hit ? ' · <b class="hit">damaged site</b>' : ''}</span>
+        </div>
+        <div class="cand-chips">${
+          list.length
+            ? list.map((c) => `<span class="chip" title="masked-marginal probability ${c.substitution_prob.toFixed(4)}">${c.label}<i>${(c.substitution_prob * 100).toFixed(1)}%</i></span>`).join('')
+            : '<span class="chip empty">none survive the class filter</span>'
+        }</div>
+      </div>`;
+    })
+    .join('');
+
+  $('preRankNote').innerHTML =
+    `Ordered by masked-marginal probability, which is what
+     <code>enumerate_candidates</code> emits. The cheap pre-rank that follows it
+     (<code>PLL − λ·edits</code>, keeping the best 3 before folding) is not run
+     here: scoring one candidate's PLL costs a fresh masked-marginal pass over
+     the whole sequence, so it is a model call per candidate. It runs in
+     <a href="#own">section 5</a> once the model is loaded.`;
+}
+
+/* ================================================================== own sequence */
+
+const own = { matrix: null, sequence: null, running: false, msPerResidue: null };
+
+/** Human estimate for the pre-rank, calibrated on this device's own throughput
+ *  rather than a guess, since it ranges from seconds to minutes. */
+function estimateSeconds(nCandidates, length) {
+  const per = own.msPerResidue || 250;
+  const secs = (nCandidates * length * per) / 1000;
+  if (secs < 90) return `${Math.max(1, Math.round(secs))}s`;
+  const mins = secs / 60;
+  return `${mins < 10 ? mins.toFixed(1) : Math.round(mins)} min`;
+}
+
+function initOwnSequence() {
+  const d = state.data;
+  $('fillCorrupt').addEventListener('click', () => {
+    $('seqInput').value = d.stages.corrupted.sequence;
+    setSeqStatus('');
+  });
+  $('fillNative').addEventListener('click', () => {
+    $('seqInput').value = d.native.sequence;
+    setSeqStatus('');
+  });
+  $('seqInput').addEventListener('input', () => setSeqStatus(''));
+  $('runEsm').addEventListener('click', runOwnSequence);
+}
+
+function setSeqStatus(msg, kind = '') {
+  $('seqStatus').innerHTML = msg ? `<span class="${kind}">${msg}</span>` : '';
+}
+
+async function runOwnSequence() {
+  if (own.running) return;
+  let seq;
+  try {
+    seq = pol.parseSequence($('seqInput').value);
+  } catch (err) {
+    setSeqStatus(err.message, 'invalid-text');
+    return;
+  }
+
+  own.running = true;
+  $('runEsm').disabled = true;
+  const bar = $('esmProgress');
+  bar.hidden = false;
+  const fill = bar.querySelector('.progress-bar');
+  fill.style.width = '0%';
+
+  try {
+    setSeqStatus('loading ESM-2…');
+    await esm.load({ onStatus: (m) => setSeqStatus(m) });
+
+    setSeqStatus(`scoring ${seq.length} residues — one masked forward pass each…`);
+    const t0 = performance.now();
+    const matrix = await esm.maskedMarginalMatrix(seq, {
+      onProgress: (done, total) => {
+        fill.style.width = `${(done / total) * 100}%`;
+        setSeqStatus(`scoring ${done}/${total} residues…`);
+      },
+    });
+    const ms = Math.round(performance.now() - t0);
+
+    own.sequence = seq;
+    own.matrix = matrix;
+    own.msPerResidue = ms / seq.length;
+    setSeqStatus(`scored ${seq.length} residues in ${(ms / 1000).toFixed(1)}s`, 'ok-text');
+    renderOwnResults(ms);
+  } catch (err) {
+    setSeqStatus(`failed: ${err.message}`, 'invalid-text');
+  } finally {
+    own.running = false;
+    $('runEsm').disabled = false;
+    bar.hidden = true;
+  }
+}
+
+function renderOwnResults(ms) {
+  const d = state.data;
+  const seq = own.sequence;
+  const matrix = own.matrix;
+  const sur = esm.residueSurprisal(seq, matrix);
+  $('ownResults').hidden = false;
+
+  const prec = esm.precision();
+  const known = { [d.stages.corrupted.sequence]: 'corrupted 1PGB', [d.native.sequence]: 'native 1PGB' };
+  const isKnown = known[seq];
+
+  $('ownProvenance').innerHTML = `
+    <span class="tag tag-computed">computed in your browser</span>
+    <span>${d.esm.browser_model} · ${prec}${prec === 'q8' ? ' (fp16 unavailable here — probabilities are approximate)' : ''}
+    · ${seq.length} residues · ${(ms / 1000).toFixed(1)}s</span>
+    ${isKnown ? `<span class="known-tag">this is the ${isKnown} sequence, so you can compare against the committed PyTorch numbers above</span>` : ''}`;
+
+  // ---- surprisal chart
+  const n = seq.length;
+  const W = 900, H = 190, PL = 44, PR = 14, PT = 14, PB = 30;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const hi = Math.max(...sur);
+  const x = (i) => PL + (n === 1 ? 0 : (i / (n - 1)) * iw);
+  const y = (v) => PT + (1 - v / hi) * ih;
+
+  const top = sur.map((v, i) => [v, i]).sort((a, b) => (b[0] - a[0]) || (a[1] - b[1])).slice(0, 5);
+  const topSet = new Map(top.map(([v, i], r) => [i, r + 1]));
+
+  const grid = [0, 0.5, 1].map((t) =>
+    `<line x1="${PL}" y1="${y(hi * t)}" x2="${W - PR}" y2="${y(hi * t)}" stroke="currentColor" stroke-opacity="0.13" />
+     <text x="${PL - 8}" y="${y(hi * t) + 4}" text-anchor="end" font-size="11" fill="currentColor" fill-opacity="0.5">${(hi * t).toFixed(1)}</text>`
+  ).join('');
+
+  const bars = sur.map((v, i) =>
+    `<rect x="${x(i) - Math.max(1, iw / n / 2)}" y="${y(v)}" width="${Math.max(1.5, iw / n * 0.8)}" height="${PT + ih - y(v)}"
+           fill="${topSet.has(i) ? '#f87171' : 'currentColor'}" fill-opacity="${topSet.has(i) ? 0.95 : 0.42}" />`
+  ).join('');
+
+  const labels = [...topSet.entries()].map(([i, r]) =>
+    `<text x="${x(i)}" y="${y(sur[i]) - 5}" text-anchor="middle" font-size="10.5" fill="#f87171" font-weight="600">${seq[i]}${i + 1}</text>`
+  ).join('');
+
+  const ticks = [1, ...Array.from({ length: 5 }, (_, k) => Math.round(((k + 1) * n) / 5))]
+    .filter((v, idx, arr) => arr.indexOf(v) === idx)
+    .map((p) => `<text x="${x(p - 1)}" y="${H - 9}" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity="0.5">${p}</text>`)
+    .join('');
+
+  $('ownSurprisal').innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Per-residue ESM-2 surprisal">
+      <g color="var(--ink)">${grid}${bars}${labels}${ticks}</g>
+    </svg>
+    <p class="metrics-note">Five most surprising positions in red:
+      <b>${top.map(([, i]) => `${seq[i]}${i + 1}`).join(', ')}</b>.</p>`;
+
+  // ---- heatmap (canvas: 20 x L cells)
+  const cw = Math.max(6, Math.min(18, Math.floor(1000 / n)));
+  const ch = 15;
+  const cvs = document.createElement('canvas');
+  cvs.width = n * cw; cvs.height = 20 * ch;
+  cvs.style.width = `${n * cw}px`; cvs.style.height = `${20 * ch}px`;
+  const ctx = cvs.getContext('2d');
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 20; k++) {
+      const p = matrix[i][k];
+      const t = Math.min(1, Math.sqrt(p));
+      ctx.fillStyle = `rgba(94, 176, 239, ${0.06 + t * 0.94})`;
+      ctx.fillRect(i * cw, k * ch, cw, ch);
+      if (pol.AA_ALPHABET[k] === seq[i]) {
+        ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5;
+        ctx.strokeRect(i * cw + 0.75, k * ch + 0.75, cw - 1.5, ch - 1.5);
+      }
+    }
+  }
+  const rowLabels = [...pol.AA_ALPHABET].map((aa) => `<div style="height:${ch}px">${aa}</div>`).join('');
+  $('ownHeatmap').innerHTML =
+    `<div class="heatmap"><div class="heatmap-rows">${rowLabels}</div><div class="heatmap-canvas"></div></div>`;
+  $('ownHeatmap').querySelector('.heatmap-canvas').appendChild(cvs);
+
+  $('heatmapCaption').textContent = d.heatmap_caption || HEATMAP_CAPTION;
+
+  // ---- policy search on this sequence (ESM feature only)
+  renderOwnSearch(seq, matrix, sur);
+}
+
+// Kept verbatim from app/streamlit_app.py's HEATMAP_CAPTION — the honest-labelling
+// contract asserted by tests/test_ui.py. It must keep saying what it does not do.
+const HEATMAP_CAPTION =
+  'Per-position ESM-2 masked-marginal substitution probabilities. This is an ' +
+  'approximation of a geometry-inspired local mutation map, not an ' +
+  'implementation of one: no tangent space and no decoder derivative is ' +
+  'computed anywhere in this system. Red outline marks the residue actually present.';
+
+function renderOwnSearch(seq, matrix, sur) {
+  const d = state.data;
+  const built = pol.buildState(seq, { esm_surprisal: sur });
+  const policy = {
+    position_score: { esm_surprisal: 1.0 },
+    proposal: { ...d.policy.seed.proposal },
+  };
+
+  const render = () => {
+    let cands, sites;
+    try {
+      pol.validatePolicy(policy);
+      sites = pol.selectPositions(policy, built.state);
+      cands = pol.enumerateCandidates(policy, built.state, seq, (s, p, n) =>
+        esm.substitutionRanking(matrix, s, p, n)
+      );
+    } catch (err) {
+      $('ownSearch').innerHTML = `<div class="invalid">${err.message}</div>`;
+      return;
+    }
+
+    $('ownSearch').innerHTML = `
+      <aside class="notice compact">
+        <p><strong>Weighted on ESM surprisal alone.</strong> The other three
+        scorable features — <code>low_plddt</code>, <code>contact_violation</code>,
+        <code>long_range_contact_violation</code> — are read off a
+        <em>predicted structure</em>, and your sequence does not have one here.
+        So this is the real interpreter on a genuinely reduced state, not the
+        full policy. The 1PGB editor in <a href="#editor">section 4</a> has all
+        four, because that structure is committed.</p>
+      </aside>
+      <div class="own-controls">
+        <label>positions <input type="range" id="own_pos" min="1" max="10" step="1" value="${policy.proposal.positions}" /><output>${policy.proposal.positions}</output></label>
+        <label>subs/position <input type="range" id="own_spp" min="1" max="19" step="1" value="${policy.proposal.substitutions_per_position}" /><output>${policy.proposal.substitutions_per_position}</output></label>
+        <label class="toggle"><input type="checkbox" id="own_class" ${policy.proposal.preserve_residue_class ? 'checked' : ''} /><span>preserve residue class</span></label>
+      </div>
+      <div class="result-summary"><b>${sites.length}</b> sites · <b>${cands.length}</b> mutations proposed</div>
+      <div class="candidate-list">${sites.map((p) => {
+        const list = cands.filter((c) => c.position === p);
+        return `<div class="cand-group">
+          <div class="cand-head"><span class="cand-pos">${seq[p]}${p + 1}</span>
+          <span class="cand-meta">surprisal ${sur[p].toFixed(2)} · ${list.length} substitution${list.length === 1 ? '' : 's'}</span></div>
+          <div class="cand-chips">${list.length
+            ? list.map((c) => `<span class="chip">${c.label}<i>${(c.substitution_prob * 100).toFixed(1)}%</i></span>`).join('')
+            : '<span class="chip empty">none survive the class filter</span>'}</div>
+        </div>`;
+      }).join('')}</div>
+      <div class="prerank-row">
+        <button class="btn" id="runPrerank"${cands.length ? '' : ' disabled'}>Run the PLL pre-rank shortlist</button>
+        <span class="prerank-note">This is the step that picks which few get
+          folded. It costs one masked-marginal pass <em>per candidate</em> —
+          ${cands.length} × ${seq.length} = ${(cands.length * seq.length).toLocaleString()}
+          forward passes, roughly
+          <b>${estimateSeconds(cands.length, seq.length)}</b> at the rate this
+          device just scored. Lower <em>positions</em> or
+          <em>subs/position</em> above to shorten it.</span>
+      </div>
+      <div id="prerankOut"></div>`;
+
+    const wire = (id, key, out) => {
+      const el = $(id);
+      el.addEventListener('input', () => {
+        policy.proposal[key] = Number(el.value);
+        render();
+      });
+    };
+    wire('own_pos', 'positions');
+    wire('own_spp', 'substitutions_per_position');
+    $('own_class').addEventListener('change', (e) => {
+      policy.proposal.preserve_residue_class = e.target.checked;
+      render();
+    });
+    $('runPrerank').addEventListener('click', () => runPrerank(cands, seq));
+  };
+  render();
+}
+
+async function runPrerank(cands, seq) {
+  const btn = $('runPrerank');
+  const out = $('prerankOut');
+  if (!cands.length) { out.innerHTML = '<p class="metrics-note">No candidates to rank.</p>'; return; }
+  btn.disabled = true;
+  out.innerHTML = '<p class="metrics-note">scoring 0/' + cands.length + '…</p>';
+  try {
+    const shortlist = await pol.prerankCandidates(
+      cands,
+      async (s) => {
+        const m = await esm.maskedMarginalMatrix(s);
+        return esm.pseudoLogLikelihood(s, m);
+      },
+      pol.SHORTLIST_SIZE,
+      pol.EDIT_PENALTY_LAMBDA,
+      (done, total) => { out.innerHTML = `<p class="metrics-note">scoring ${done}/${total}…</p>`; }
+    );
+    out.innerHTML = `
+      <div class="shortlist">
+        <div class="shortlist-head">Shortlist — the ${shortlist.length} that would be folded</div>
+        ${shortlist.map((c, i) => `<div class="shortlist-row">
+          <span class="rank">${i + 1}</span>
+          <span class="chip">${c.label}</span>
+          <span class="sl-score">PLL − λ·edits = <b>${c.prerank_score.toFixed(3)}</b></span>
+        </div>`).join('')}
+        <p class="metrics-note">λ = ${pol.EDIT_PENALTY_LAMBDA}, so a tie in
+        plausibility resolves toward fewer edits. In the full pipeline
+        ${shortlist.length === 1 ? 'this is the candidate' : `these ${shortlist.length} are what`}
+        ESMFold actually predicts, and only then does the hidden evaluator see them.</p>
+      </div>`;
+  } catch (err) {
+    out.innerHTML = `<p class="invalid-text">failed: ${err.message}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Module scripts are deferred, so DOMContentLoaded may already have fired by the
+// time this evaluates. Guard rather than rely on which side of the race we land.
+let _booted = false;
+const bootOnce = () => { if (!_booted) { _booted = true; boot(); } };
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootOnce);
+} else {
+  bootOnce();
+}

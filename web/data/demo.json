@@ -1,0 +1,434 @@
+{
+  "protein": "1PGB",
+  "variant": "corrupt_01",
+  "generated_from": "committed artefacts only; see scripts/build_web_data.py",
+  "native": {
+    "sequence": "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE",
+    "structure": "data/structures/native.pdb",
+    "length": 56,
+    "contacts": 192
+  },
+  "corruptions": [
+    {
+      "position": 8,
+      "from": "G",
+      "to": "A",
+      "rsa": 0.0309,
+      "buried": true
+    },
+    {
+      "position": 17,
+      "from": "T",
+      "to": "A",
+      "rsa": 0.1418,
+      "buried": true
+    },
+    {
+      "position": 33,
+      "from": "A",
+      "to": "K",
+      "rsa": 0.0,
+      "buried": true
+    },
+    {
+      "position": 49,
+      "from": "K",
+      "to": "P",
+      "rsa": 0.1514,
+      "buried": true
+    },
+    {
+      "position": 54,
+      "from": "T",
+      "to": "D",
+      "rsa": 0.2051,
+      "buried": true
+    }
+  ],
+  "stages": {
+    "corrupted": {
+      "label": "corrupted input",
+      "sequence": "MTYKLILNAKTLKGETTAEAVDAATAEKVFKQYKNDNGVDGEWTYDDATPTFTVDE",
+      "structure": "data/structures/corrupted.pdb",
+      "cache_hash": "704ecf916286a042",
+      "computed": {
+        "tm_score": 0.6611,
+        "contact_recovery": 0.7083,
+        "sequence_recovery": 0.9107,
+        "mean_plddt": 0.5284,
+        "clashes": 2,
+        "radius_of_gyration": 11.11,
+        "edit_count": 0,
+        "plddt_per_residue": [
+          0.46,
+          0.5,
+          0.52,
+          0.49,
+          0.52,
+          0.49,
+          0.48,
+          0.44,
+          0.43,
+          0.42,
+          0.44,
+          0.43,
+          0.46,
+          0.43,
+          0.46,
+          0.45,
+          0.46,
+          0.47,
+          0.47,
+          0.46,
+          0.48,
+          0.56,
+          0.6,
+          0.64,
+          0.65,
+          0.62,
+          0.65,
+          0.68,
+          0.65,
+          0.63,
+          0.69,
+          0.71,
+          0.66,
+          0.65,
+          0.71,
+          0.71,
+          0.64,
+          0.61,
+          0.59,
+          0.56,
+          0.54,
+          0.51,
+          0.57,
+          0.48,
+          0.49,
+          0.45,
+          0.47,
+          0.44,
+          0.47,
+          0.44,
+          0.47,
+          0.49,
+          0.45,
+          0.48,
+          0.44,
+          0.43
+        ],
+        "helices": [
+          [
+            8,
+            12
+          ],
+          [
+            21,
+            38
+          ],
+          [
+            45,
+            49
+          ]
+        ],
+        "strands": [
+          [
+            0,
+            5
+          ],
+          [
+            13,
+            14
+          ],
+          [
+            39,
+            43
+          ],
+          [
+            50,
+            51
+          ]
+        ],
+        "synthetic": false
+      },
+      "recorded_hidden_score": 0.5699
+    },
+    "baseline": {
+      "label": "baseline repair (P50A)",
+      "sequence": "MTYKLILNAKTLKGETTAEAVDAATAEKVFKQYKNDNGVDGEWTYDDATATFTVDE",
+      "structure": "data/structures/baseline.pdb",
+      "cache_hash": "49e173d4ccfb7496",
+      "computed": {
+        "tm_score": 0.9416,
+        "contact_recovery": 0.9427,
+        "sequence_recovery": 0.9107,
+        "mean_plddt": 0.8304,
+        "clashes": 0,
+        "radius_of_gyration": 10.52,
+        "edit_count": 1,
+        "plddt_per_residue": [
+          0.89,
+          0.92,
+          0.92,
+          0.91,
+          0.88,
+          0.86,
+          0.81,
+          0.79,
+          0.76,
+          0.72,
+          0.67,
+          0.7,
+          0.77,
+          0.79,
+          0.84,
+          0.86,
+          0.89,
+          0.89,
+          0.91,
+          0.9,
+          0.91,
+          0.91,
+          0.9,
+          0.88,
+          0.89,
+          0.89,
+          0.86,
+          0.85,
+          0.85,
+          0.86,
+          0.83,
+          0.81,
+          0.78,
+          0.74,
+          0.75,
+          0.74,
+          0.7,
+          0.68,
+          0.68,
+          0.68,
+          0.75,
+          0.79,
+          0.82,
+          0.87,
+          0.88,
+          0.9,
+          0.9,
+          0.9,
+          0.9,
+          0.92,
+          0.91,
+          0.89,
+          0.87,
+          0.82,
+          0.79,
+          0.72
+        ],
+        "helices": [
+          [
+            8,
+            12
+          ],
+          [
+            21,
+            38
+          ],
+          [
+            45,
+            50
+          ]
+        ],
+        "strands": [
+          [
+            0,
+            5
+          ],
+          [
+            13,
+            16
+          ],
+          [
+            39,
+            43
+          ]
+        ],
+        "synthetic": false
+      },
+      "recorded_hidden_score": 0.8026
+    },
+    "patched": {
+      "label": "patched repair (P50M)",
+      "sequence": "MTYKLILNAKTLKGETTAEAVDAATAEKVFKQYKNDNGVDGEWTYDDATMTFTVDE",
+      "structure": "data/structures/patched.pdb",
+      "cache_hash": "7de2f7f402a5b8ad",
+      "computed": {
+        "tm_score": 0.9479,
+        "contact_recovery": 0.9531,
+        "sequence_recovery": 0.9107,
+        "mean_plddt": 0.8198,
+        "clashes": 0,
+        "radius_of_gyration": 10.52,
+        "edit_count": 1,
+        "plddt_per_residue": [
+          0.9,
+          0.92,
+          0.91,
+          0.9,
+          0.87,
+          0.86,
+          0.8,
+          0.78,
+          0.74,
+          0.71,
+          0.67,
+          0.69,
+          0.75,
+          0.79,
+          0.84,
+          0.84,
+          0.88,
+          0.88,
+          0.9,
+          0.9,
+          0.9,
+          0.9,
+          0.89,
+          0.88,
+          0.89,
+          0.88,
+          0.85,
+          0.84,
+          0.85,
+          0.85,
+          0.81,
+          0.8,
+          0.75,
+          0.71,
+          0.72,
+          0.69,
+          0.66,
+          0.66,
+          0.66,
+          0.68,
+          0.74,
+          0.78,
+          0.8,
+          0.86,
+          0.88,
+          0.9,
+          0.9,
+          0.9,
+          0.91,
+          0.91,
+          0.9,
+          0.88,
+          0.86,
+          0.81,
+          0.78,
+          0.7
+        ],
+        "helices": [
+          [
+            8,
+            12
+          ],
+          [
+            21,
+            38
+          ],
+          [
+            45,
+            50
+          ]
+        ],
+        "strands": [
+          [
+            0,
+            5
+          ],
+          [
+            13,
+            16
+          ],
+          [
+            39,
+            43
+          ]
+        ],
+        "synthetic": false
+      },
+      "recorded_hidden_score": 0.808
+    }
+  },
+  "policy": {
+    "seed_yaml": "position_score:\n  contact_violation: 0.2\n  esm_surprisal: 0.6\n  low_plddt: 0.2\nproposal:\n  max_total_edits: 3\n  positions: 3\n  preserve_residue_class: true\n  substitutions_per_position: 4\n",
+    "patched": {
+      "position_score": {
+        "esm_surprisal": 0.6,
+        "low_plddt": 0.2,
+        "contact_violation": 0.2
+      },
+      "proposal": {
+        "positions": 5,
+        "substitutions_per_position": null,
+        "preserve_residue_class": true,
+        "max_total_edits": 3
+      }
+    },
+    "seed": {
+      "position_score": {
+        "esm_surprisal": 0.6,
+        "low_plddt": 0.2,
+        "contact_violation": 0.2
+      },
+      "proposal": {
+        "positions": 3,
+        "substitutions_per_position": 4,
+        "preserve_residue_class": true,
+        "max_total_edits": 3
+      }
+    }
+  },
+  "recorded": {
+    "date": "2026-07-30",
+    "source": "DEMO.md",
+    "model_policy_reviser": "gemma4:12b",
+    "total_seconds": 105,
+    "hidden_score": {
+      "corrupted": 0.5699,
+      "baseline": 0.8026,
+      "patched": 0.808
+    },
+    "proposals": {
+      "baseline": 12,
+      "patched": 31
+    },
+    "sites_1based": {
+      "baseline": [
+        50,
+        21,
+        55
+      ],
+      "patched": [
+        50,
+        21,
+        55,
+        48,
+        11
+      ]
+    },
+    "picked": {
+      "baseline": "P50A",
+      "patched": "P50M"
+    },
+    "gemma_rationale": "Increasing positions and substitutions per position expands the search space, allowing for more diverse mutations to be explored.",
+    "counterexample_fired": false
+  },
+  "evaluator_weights": {
+    "tm_score": 0.55,
+    "esm_score": 0.2,
+    "plddt": 0.15,
+    "contact_recovery": 0.1,
+    "edit_fraction": -0.05
+  }
+}

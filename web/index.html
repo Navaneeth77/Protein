@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ReFold — a protein-repair agent that rewrites its own search policy</title>
+<meta name="description" content="ReFold repairs a damaged protein, is told one bit about how it did, and a local LLM rewrites its search policy. Recorded run on 1PGB with real ESMFold structures." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Protein repair · self-revising search policy</div>
+    <h1>ReFold</h1>
+    <p class="lede">
+      A protein-repair agent that rewrites its own search strategy when a hidden
+      verifier disagrees with it.
+    </p>
+    <p class="sub">
+      ReFold takes a damaged protein sequence, repairs it, and is then told only
+      <em>one bit</em> about how well it did. From that, a local LLM rewrites the
+      agent's search policy — not its code, a constrained policy language — and the
+      search runs again with different behaviour.
+    </p>
+    <div class="hero-badges" id="heroBadges"></div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ------------------------------------------------------------------ -->
+  <aside class="notice" id="provenance">
+    <h2>What this page is</h2>
+    <p>
+      This is a <strong>replay</strong>, not a live run. ESMFold is an 8.4&nbsp;GB
+      checkpoint and the policy reviser is a 12B model served by local Ollama —
+      neither can run in a serverless function. Everything below comes from
+      artefacts committed to the repository, and each number is labelled with how
+      it got here:
+    </p>
+    <ul class="legend">
+      <li>
+        <span class="tag tag-computed">computed</span>
+        recomputed in the browser build step by this project's own code
+        (<code>src/geometry.py</code>, <code>src/pdb_io.py</code>) from the committed
+        ESMFold predictions and the real 1PGB crystal structure. Reproduce with
+        <code>python scripts/build_web_data.py</code>.
+      </li>
+      <li>
+        <span class="tag tag-recorded">recorded</span>
+        transcribed from the verified run of <span id="runDate">2026-07-30</span>
+        documented in <code>DEMO.md</code>. The composite hidden score depends on an
+        ESM-2 term whose cache is gitignored, so it cannot be recomputed here.
+      </li>
+    </ul>
+  </aside>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section id="protein">
+    <h2><span class="num">1</span> The damaged protein</h2>
+    <p class="section-lede">
+      Protein G domain B1 (<strong>1PGB</strong>), 56 residues, with five point
+      substitutions introduced at buried positions. The agent sees only the
+      corrupted sequence and its own predicted structure — never the table below.
+    </p>
+
+    <div class="seq-block">
+      <div class="seq-row">
+        <div class="seq-label">
+          native
+          <span class="seq-note">ground truth, withheld from the agent</span>
+        </div>
+        <div class="seq" id="seqNative"></div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-label">
+          corrupted
+          <span class="seq-note">the agent's input</span>
+        </div>
+        <div class="seq" id="seqCorrupt"></div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-label">
+          repaired
+          <span class="seq-note">after the patched policy</span>
+        </div>
+        <div class="seq" id="seqRepaired"></div>
+      </div>
+      <div class="seq-key">
+        <span><i class="sw sw-bad"></i> corrupted site</span>
+        <span><i class="sw sw-good"></i> repair applied</span>
+        <span class="seq-ruler-note">hover any residue for its position</span>
+      </div>
+    </div>
+
+    <table class="data" id="corruptTable">
+      <caption>The five corruptions. Never shown to the agent.</caption>
+      <thead>
+        <tr><th>Position</th><th>From</th><th>To</th><th>Relative solvent accessibility</th><th>Buried</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section id="structure">
+    <h2><span class="num">2</span> What the fold actually did</h2>
+    <p class="section-lede">
+      Real ESMFold predictions, committed to <code>data/cache/</code>. The reference
+      crystal structure is gated behind a toggle — with the toggle off it is never
+      fetched, mirroring how the Streamlit app withholds it.
+    </p>
+
+    <div class="viewer-grid">
+      <div class="viewer-panel">
+        <div class="viewer-controls" id="viewerControls"></div>
+        <div id="viewer" class="viewer"></div>
+        <div class="viewer-foot">
+          <label class="toggle">
+            <input type="checkbox" id="revealToggle" />
+            <span>Reveal the withheld reference structure</span>
+          </label>
+          <div class="viewer-legend" id="viewerLegend"></div>
+        </div>
+      </div>
+
+      <div class="metrics-panel">
+        <h3>Scored against the real crystal structure</h3>
+        <div class="metric-tabs" id="metricTabs"></div>
+        <dl class="metrics" id="metrics"></dl>
+        <p class="metrics-note">
+          These five are the hidden evaluator's decomposition minus its ESM term.
+          The agent is never shown any of them — only the single scalar below.
+        </p>
+        <div class="hidden-score" id="hiddenScore"></div>
+      </div>
+    </div>
+
+    <div class="plddt-block">
+      <h3>Per-residue confidence (pLDDT)</h3>
+      <p class="section-lede">
+        Straight from the B-factor column of the committed predictions. Confidence
+        is <em>not</em> correctness — only the evaluator, which holds the reference,
+        decides that.
+      </p>
+      <div id="plddtChart" class="plddt-chart"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section id="loop">
+    <h2><span class="num">3</span> The loop, once</h2>
+    <p class="section-lede">
+      The agent repairs under a seed policy, the hidden verifier returns one scalar,
+      and Gemma reads a grounded state graph and returns exactly one policy patch.
+      Its only output channel is a fixed DSL — four scoring weights and three search
+      parameters, schema-validated before the interpreter will touch it. It never
+      emits code.
+    </p>
+
+    <div class="loop-grid">
+      <article class="round">
+        <header>
+          <span class="round-tag">round 1</span>
+          <h3>Seed policy</h3>
+        </header>
+        <pre class="yaml" id="seedPolicy"></pre>
+        <ul class="round-facts" id="baselineFacts"></ul>
+      </article>
+
+      <div class="arrow" aria-hidden="true">
+        <div class="arrow-line"></div>
+        <div class="arrow-head"></div>
+      </div>
+
+      <article class="round">
+        <header>
+          <span class="round-tag">round 2</span>
+          <h3>After Gemma's patch</h3>
+        </header>
+        <pre class="yaml" id="patchedPolicy"></pre>
+        <p class="policy-note">
+          <code>positions</code> is pinned by the recorded site list (three sites
+          became five). <code>substitutions_per_position</code> is known to have
+          risen from Gemma's own rationale, but its exact value lived only in
+          <code>logs/</code>, which is gitignored — so it is left unfilled rather
+          than guessed.
+        </p>
+        <ul class="round-facts" id="patchedFacts"></ul>
+      </article>
+    </div>
+
+    <blockquote class="quote" id="gemmaQuote"></blockquote>
+
+    <div class="score-bars" id="scoreBars"></div>
+
+    <aside class="caveat">
+      <h3>One thing to be accurate about</h3>
+      <p>
+        On this variant the public and hidden signals <em>agree</em>, so no
+        counterexample fires. The disagreement machinery is real and test-covered
+        (<code>src/agent/counterexamples.py</code>), but this run does not
+        demonstrate it. The gain from round 1 to round 2 is
+        <strong>+0.005</strong> — small, and reported as such.
+      </p>
+    </aside>
+  </section>
+
+  <!-- ------------------------------------------------------------------ -->
+  <section id="run">
+    <h2><span class="num">4</span> Running it for real</h2>
+    <p class="section-lede">
+      The live pipeline runs locally. It needs the ESMFold checkpoint and Ollama;
+      the fold cache ships with the repository so the demo does not re-fold.
+    </p>
+    <pre class="shell"><code>git clone https://github.com/Navaneeth77/Protein.git
+cd Protein
+pip install -r requirements.txt
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+python scripts/fetch_esmfold.py     # ~8.4 GB, resumable
+ollama pull gemma4:12b
+
+./run_mvp.sh                        # macOS / Linux
+.\run_mvp.ps1                       # Windows</code></pre>
+    <p class="section-lede">
+      Then open <code>http://localhost:8501</code> and press <strong>Run ReFold</strong>.
+    </p>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>
+      ReFold — <a href="https://github.com/Navaneeth77/Protein">source on GitHub</a>.
+      Structures: ESMFold <code>facebook/esmfold_v1</code>. Sequence plausibility:
+      <code>facebook/esm2_t12_35M_UR50D</code>. Policy revision: <code>gemma4:12b</code>
+      via Ollama. Reference structure: PDB <a href="https://www.rcsb.org/structure/1PGB">1PGB</a>.
+    </p>
+    <p class="disclaimer">
+      This is a research harness. It does not design a therapeutic, does not repair
+      function in any organism, and makes no claim to have found new protein physics.
+    </p>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# Keep the Python project out of the Vercel upload entirely.
+#
+# Two reasons. First, Vercel's zero-config detection sees requirements.txt and
+# tries to build a Python serverless function — that is the
+# "No python entrypoint found" error this file prevents. Second, none of it is
+# reachable from the static site: web/ is self-contained, and its data bundle is
+# generated ahead of time by scripts/build_web_data.py and committed.
+#
+# The live pipeline (ESMFold + Ollama) cannot run on Vercel at all; see
+# web/README.md for why and DEMO.md for how to run it locally.
+
+src/
+app/
+tests/
+scripts/
+docs/
+data/
+logs/
+
+requirements.txt
+run_mvp.ps1
+run_mvp.sh
+
+*.md
+LICENSE
+.gitignore

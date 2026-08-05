@@ -41,11 +41,28 @@ async function boot() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     data = await res.json();
   } catch (err) {
+    // A 404 here means the bundle was not served, which has two very different
+    // causes worth telling apart. Locally it means the file was never built; on
+    // a deployment it means web/data/ never reached the host — which is exactly
+    // what an unanchored "data/" in .vercelignore does, since .gitignore syntax
+    // matches at any depth and silently swallows web/data/ too.
+    const missing = /HTTP 404/.test(String(err));
+    const local = ['localhost', '127.0.0.1', ''].includes(location.hostname);
     document.querySelector('.wrap').insertAdjacentHTML(
       'afterbegin',
-      `<div class="notice"><h2>Could not load demo data</h2><p>${String(err)}</p>
-       <p>Run <code>python scripts/build_web_data.py</code> to regenerate
-       <code>web/data/demo.json</code>.</p></div>`
+      `<div class="notice"><h2>Could not load demo data</h2>
+       <p><code>data/demo.json</code> could not be fetched — ${String(err)}.
+       Everything on this page is driven by that bundle, so nothing below will render.</p>
+       ${missing && !local
+        ? `<p>The page itself was served, so this is a <strong>deployment</strong> problem
+           rather than a build one: <code>web/data/</code> did not reach the host. Check that
+           the deploy ignore rules are anchored to the repository root
+           (<code>/data/</code>, not <code>data/</code> — the latter matches at any depth and
+           excludes <code>web/data/</code> as well).</p>`
+        : `<p>Regenerate it with <code>python scripts/build_web_data.py</code>, and serve
+           the directory over HTTP (<code>python3 -m http.server 8765 --directory web</code>)
+           — <code>fetch</code> will not read it from <code>file://</code>.</p>`}
+       </div>`
     );
     return;
   }

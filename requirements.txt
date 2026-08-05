@@ -1,0 +1,48 @@
+# P0.1 — exact versions this build was verified against.
+#
+# Environment: Windows 11, Python 3.13.13 (miniconda base), CPU only.
+#
+# Not installable from this file, and both required:
+#
+#   Ollama           https://ollama.com    then:  ollama pull gemma4:12b
+#   ESMFold weights  python scripts/fetch_esmfold.py    (~8.4 GB, resumable)
+#
+# Three notes that cost real time, recorded so they need not be rediscovered:
+#
+# 1. The original ESMFold docs recommend Python <= 3.9. On this setup Python
+#    3.13 works: `transformers.EsmForProteinFolding` imports and
+#    facebook/esm2_t12_35M_UR50D loads and scores correctly. The smoke test in
+#    scripts/smoke_test.py is how that was established rather than assumed.
+#
+# 2. torch must come from the CPU index, or pip pulls a multi-GB CUDA build:
+#      pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# 3. tmtools has no cp313 wheel and its sdist needs a C toolchain, so it is NOT
+#    installed here. TM-score is computed by src/geometry.py's own
+#    Zhang-Skolnick fragment-seeded implementation instead.
+#    scripts/validate_tm_score.py measures the two against each other under an
+#    interpreter that does have tmtools: agreement is 0.00015 for TM >= 0.74,
+#    with a known underestimate of up to 0.06 below TM 0.5.
+#    src/evaluator.py uses tmtools automatically if it is ever installed, and
+#    pins tm_norm_chain2 either way.
+
+torch==2.13.0+cpu          # install from https://download.pytorch.org/whl/cpu
+transformers==5.14.1
+tokenizers==0.22.2
+safetensors==0.8.0
+biopython==1.87
+numpy==2.4.6
+pandas==3.0.3
+scipy==1.17.1
+PyYAML==6.0.3
+jsonschema==4.26.0
+jsonlines==4.0.0
+streamlit==1.60.0
+py3Dmol==2.5.5
+stmol==0.0.9
+altair==6.2.2
+pytest==9.0.3
+
+# Optional. Install if a cp-matching wheel exists for your interpreter; the
+# evaluator picks it up automatically and reports which backend it used.
+# tmtools==0.2.0

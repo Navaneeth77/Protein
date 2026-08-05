@@ -1,0 +1,29 @@
+{
+  "seed": 90210,
+  "prefix": "holdout",
+  "variants": {
+    "holdout_01": [
+      {
+        "position": 29,
+        "from": "F",
+        "to": "Q",
+        "rsa": 0.0252,
+        "buried": true
+      },
+      {
+        "position": 53,
+        "from": "V",
+        "to": "Y",
+        "rsa": 0.0,
+        "buried": true
+      },
+      {
+        "position": 54,
+        "from": "T",
+        "to": "V",
+        "rsa": 0.2051,
+        "buried": true
+      }
+    ]
+  }
+}

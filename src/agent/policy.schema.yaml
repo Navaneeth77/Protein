@@ -1,0 +1,64 @@
+# P3.1 — the ONLY vocabulary the outer loop is allowed to speak.
+#
+# This is a JSON Schema written in YAML. It is data, never code: the outer loop
+# emits a payload, this schema validates it, and src/agent/policy_interpreter.py
+# executes it deterministically. Nothing in a policy is ever eval'd (C2).
+#
+# `position_score` may carry keys beyond the three seeded ones, but ONLY names
+# that the grounder (P2.7) already computes — see
+# src/agent/grounder.py::SCORABLE_FEATURES, which validate_policy() cross-checks
+# against propertyNames below. That is what makes "activate a state feature" a
+# safe patch while still forbidding invented computations.
+#
+# Two rules cannot be expressed in JSON Schema and are enforced in
+# src/agent/policy.py::validate_policy instead:
+#   1. position_score weights must sum to 1.0 (tolerance 1e-6)
+#   2. every position_score key must appear in grounder.SCORABLE_FEATURES
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: ReFold policy DSL
+type: object
+required: [position_score, proposal]
+additionalProperties: false
+
+properties:
+  position_score:
+    type: object
+    description: >-
+      Per-residue weights. Each key names a state.json residue field; each value
+      is that field's weight in the position-selection score.
+    minProperties: 1
+    propertyNames:
+      enum:
+        - esm_surprisal
+        - low_plddt
+        - contact_violation
+        - long_range_contact_violation
+    additionalProperties:
+      type: number
+      minimum: 0.0
+      maximum: 1.0
+
+  proposal:
+    type: object
+    required:
+      - positions
+      - substitutions_per_position
+      - preserve_residue_class
+      - max_total_edits
+    additionalProperties: false
+    properties:
+      positions:
+        type: integer
+        minimum: 1
+        maximum: 10
+      substitutions_per_position:
+        type: integer
+        minimum: 1
+        maximum: 19
+      preserve_residue_class:
+        type: boolean
+      max_total_edits:
+        type: integer
+        minimum: 1
+        maximum: 10

@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReFold grounded state",
+  "description": "Explicit object/relation graph handed to the policy interpreter and to the outer loop. Deliberately not an ESM embedding: every field is a named quantity a policy weight can refer to.",
+  "type": "object",
+  "required": ["sequence_length", "residues", "relations"],
+  "additionalProperties": false,
+  "properties": {
+    "sequence_length": { "type": "integer", "minimum": 1 },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mean_plddt": { "type": "number" },
+        "mean_esm_surprisal": { "type": "number" },
+        "pseudo_log_likelihood": { "type": "number" },
+        "radius_of_gyration": { "type": "number" },
+        "clashes": { "type": "integer", "minimum": 0 },
+        "n_contacts": { "type": "integer", "minimum": 0 },
+        "plddt_raw_range": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "residues": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "position",
+          "aa",
+          "esm_surprisal",
+          "plddt",
+          "contact_degree",
+          "long_range_contact_degree",
+          "ss_region"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "position": { "type": "integer", "minimum": 0 },
+          "aa": { "type": "string", "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$" },
+          "residue_class": {
+            "type": "string",
+            "enum": ["hydrophobic", "polar", "charged"]
+          },
+          "esm_surprisal": { "type": "number", "minimum": 0 },
+          "plddt": { "type": "number" },
+          "low_plddt": { "type": "number", "minimum": 0, "maximum": 1 },
+          "contact_degree": { "type": "integer", "minimum": 0 },
+          "long_range_contact_degree": { "type": "integer", "minimum": 0 },
+          "contact_violation": { "type": "number", "minimum": 0 },
+          "long_range_contact_violation": { "type": "number", "minimum": 0 },
+          "ss_region": { "type": "string", "enum": ["helix", "strand", "coil"] }
+        }
+      }
+    },
+    "relations": {
+      "type": "object",
+      "required": ["contacts", "helices", "mutation_effects"],
+      "additionalProperties": false,
+      "properties": {
+        "contacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["i", "j", "sequence_separation"],
+            "additionalProperties": false,
+            "properties": {
+              "i": { "type": "integer", "minimum": 0 },
+              "j": { "type": "integer", "minimum": 0 },
+              "sequence_separation": { "type": "integer", "minimum": 1 },
+              "long_range": { "type": "boolean" }
+            }
+          }
+        },
+        "helices": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 0 },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "strands": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 0 },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "mutation_effects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["position", "to", "breaks_contact"],
+            "additionalProperties": false,
+            "properties": {
+              "position": { "type": "integer", "minimum": 0 },
+              "from": { "type": "string", "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$" },
+              "to": { "type": "string", "pattern": "^[ACDEFGHIKLMNPQRSTVWY]$" },
+              "breaks_contact": { "type": "boolean" },
+              "contacts_lost": { "type": "integer", "minimum": 0 },
+              "contacts_gained": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

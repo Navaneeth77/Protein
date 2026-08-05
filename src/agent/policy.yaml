@@ -1,0 +1,14 @@
+# Seed policy (P3.1). Weights sum to 1.0.
+#
+# long_range_contact_violation is intentionally absent: the grounder computes it
+# from the start, but the seed policy does not use it. Activating it is the
+# representation patch the outer loop is expected to discover.
+position_score:
+  esm_surprisal: 0.60
+  low_plddt: 0.20
+  contact_violation: 0.20
+proposal:
+  positions: 3
+  substitutions_per_position: 4
+  preserve_residue_class: true
+  max_total_edits: 3

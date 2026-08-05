@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ------------------------------------------------------------- Model weights
+# The ESMFold checkpoint is ~8.4 GB. Fetch it with scripts/fetch_esmfold.py.
+data/models/
+
+# ------------------------------------------------------------------- Caches
+# data/cache/*.pdb IS committed on purpose: ~3 MB of predicted structures that
+# make the demo instant instead of a 13-minute precompute at ~40 s each.
+#
+# Excluded:
+#   synthetic/  fixture geometry, must never be mistaken for a prediction
+#   esm_score/  ~230 small .npy files that rebuild in seconds from a 130 MB model
+data/cache/synthetic/
+data/cache/esm_score/
+
+# ------------------------------------------------------------- Run artefacts
+# Regenerated on every run. logs/.gitkeep is tracked so the directory exists.
+logs/*
+!logs/.gitkeep
+
+# -------------------------------------------------------------------- Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ------------------------------------------------------------ Agent tooling
+.claude/

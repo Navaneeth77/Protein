@@ -1,0 +1,156 @@
+{
+  "seed": 1729,
+  "prefix": "corrupt",
+  "variants": {
+    "corrupt_01": [
+      {
+        "position": 8,
+        "from": "G",
+        "to": "A",
+        "rsa": 0.0309,
+        "buried": true
+      },
+      {
+        "position": 17,
+        "from": "T",
+        "to": "A",
+        "rsa": 0.1418,
+        "buried": true
+      },
+      {
+        "position": 33,
+        "from": "A",
+        "to": "K",
+        "rsa": 0.0,
+        "buried": true
+      },
+      {
+        "position": 49,
+        "from": "K",
+        "to": "P",
+        "rsa": 0.1514,
+        "buried": true
+      },
+      {
+        "position": 54,
+        "from": "T",
+        "to": "D",
+        "rsa": 0.2051,
+        "buried": true
+      }
+    ],
+    "corrupt_02": [
+      {
+        "position": 3,
+        "from": "K",
+        "to": "W",
+        "rsa": 0.2203,
+        "buried": true
+      },
+      {
+        "position": 8,
+        "from": "G",
+        "to": "H",
+        "rsa": 0.0309,
+        "buried": true
+      },
+      {
+        "position": 22,
+        "from": "A",
+        "to": "G",
+        "rsa": 0.222,
+        "buried": true
+      }
+    ],
+    "corrupt_03": [
+      {
+        "position": 6,
+        "from": "L",
+        "to": "R",
+        "rsa": 0.024,
+        "buried": true
+      },
+      {
+        "position": 29,
+        "from": "F",
+        "to": "Y",
+        "rsa": 0.0252,
+        "buried": true
+      },
+      {
+        "position": 53,
+        "from": "V",
+        "to": "H",
+        "rsa": 0.0,
+        "buried": true
+      }
+    ],
+    "corrupt_04": [
+      {
+        "position": 11,
+        "from": "L",
+        "to": "G",
+        "rsa": 0.1983,
+        "buried": true
+      },
+      {
+        "position": 38,
+        "from": "V",
+        "to": "R",
+        "rsa": 0.0185,
+        "buried": true
+      },
+      {
+        "position": 40,
+        "from": "G",
+        "to": "E",
+        "rsa": 0.192,
+        "buried": true
+      },
+      {
+        "position": 53,
+        "from": "V",
+        "to": "H",
+        "rsa": 0.0,
+        "buried": true
+      }
+    ],
+    "corrupt_05": [
+      {
+        "position": 3,
+        "from": "K",
+        "to": "W",
+        "rsa": 0.2203,
+        "buried": true
+      },
+      {
+        "position": 19,
+        "from": "A",
+        "to": "E",
+        "rsa": 0.1093,
+        "buried": true
+      },
+      {
+        "position": 22,
+        "from": "A",
+        "to": "S",
+        "rsa": 0.222,
+        "buried": true
+      },
+      {
+        "position": 29,
+        "from": "F",
+        "to": "K",
+        "rsa": 0.0252,
+        "buried": true
+      },
+      {
+        "position": 38,
+        "from": "V",
+        "to": "H",
+        "rsa": 0.0185,
+        "buried": true
+      }
+    ]
+  }
+}

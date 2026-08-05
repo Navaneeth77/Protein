@@ -6,21 +6,29 @@
 # reachable from the static site: web/ is self-contained, and its data bundle is
 # generated ahead of time by scripts/build_web_data.py and committed.
 #
+# EVERY PATTERN HERE MUST START WITH "/".
+# This file uses .gitignore syntax, where an unanchored pattern matches at any
+# depth. Writing "data/" instead of "/data/" therefore excludes web/data/ as
+# well as the root data/ — which shipped a site whose demo.json and every .pdb
+# returned 404. Anchor to the root so a directory name that happens to be reused
+# inside web/ cannot be caught by a rule meant for the repository root.
+#
 # The live pipeline (ESMFold + Ollama) cannot run on Vercel at all; see
 # web/README.md for why and DEMO.md for how to run it locally.
 
-src/
-app/
-tests/
-scripts/
-docs/
-data/
-logs/
+/src/
+/app/
+/tests/
+/scripts/
+/docs/
+/data/
+/logs/
 
-requirements.txt
-run_mvp.ps1
-run_mvp.sh
+/requirements.txt
+/run_mvp.ps1
+/run_mvp.sh
 
-*.md
-LICENSE
-.gitignore
+/*.md
+/LICENSE
+/.gitignore
+/.claude/

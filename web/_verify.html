@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>structure.js self-check</title>
+<style>
+  body { font-family: ui-monospace, Menlo, monospace; background:#0c0f14; color:#e6ebf4; padding:24px; line-height:1.6; }
+  .pass { color:#4ade80 } .fail { color:#f87171; font-weight:700 }
+  h1 { font-size:16px } p { color:#96a3b8; max-width:80ch; font-size:13px }
+</style>
+</head>
+<body>
+<h1>web/structure.js — agreement with src/geometry.py</h1>
+<p>
+  The JS port solves the optimal rotation with the quaternion form rather than
+  NumPy's SVD, so the two implementations are not the same code and their
+  agreement has to be measured. Expected values were produced by
+  <code>src/geometry.py</code> on the same committed structures.
+</p>
+<pre id="out">running…</pre>
+<script type="module">
+import { parsePdb, tmScore, rmsd } from './structure.js';
+
+// From src/geometry.py: tm_score_fixed_alignment / rmsd over web/data/structures.
+const EXPECTED = {
+  corrupted:            { tm: 0.661176, rmsd: 2.007022 },
+  baseline:             { tm: 0.941643, rmsd: 0.651855 },
+  patched:              { tm: 0.947936, rmsd: 0.608108 },
+  corrupted_vs_patched: { tm: 0.680873, rmsd: 1.864798 },
+};
+const TM_TOL = 5e-4;
+const RMSD_TOL = 5e-4;
+
+const out = document.getElementById('out');
+const lines = [];
+const say = (m) => { lines.push(m); out.innerHTML = lines.join('\n'); };
+
+const load = async (n) => parsePdb(await (await fetch(`data/structures/${n}.pdb`)).text());
+
+try {
+  const native = await load('native');
+  const s = {
+    corrupted: await load('corrupted'),
+    baseline: await load('baseline'),
+    patched: await load('patched'),
+  };
+
+  let failures = 0;
+  const check = (name, gotTm, gotRmsd) => {
+    const e = EXPECTED[name];
+    const dTm = Math.abs(gotTm - e.tm);
+    const dR = Math.abs(gotRmsd - e.rmsd);
+    const ok = dTm <= TM_TOL && dR <= RMSD_TOL;
+    if (!ok) failures++;
+    say(
+      `${ok ? '<span class="pass">PASS</span>' : '<span class="fail">FAIL</span>'} ` +
+      `${name.padEnd(22)} TM ${gotTm.toFixed(6)} (py ${e.tm.toFixed(6)}, Δ${dTm.toExponential(1)})  ` +
+      `RMSD ${gotRmsd.toFixed(6)} (py ${e.rmsd.toFixed(6)}, Δ${dR.toExponential(1)})`
+    );
+  };
+
+  for (const k of ['corrupted', 'baseline', 'patched']) {
+    check(k, tmScore(s[k].ca, native.ca), rmsd(s[k].ca, native.ca));
+  }
+  check('corrupted_vs_patched', tmScore(s.corrupted.ca, s.patched.ca), rmsd(s.corrupted.ca, s.patched.ca));
+
+  // Identity and self-consistency properties.
+  const selfTm = tmScore(native.ca, native.ca);
+  const selfOk = Math.abs(selfTm - 1) < 1e-9;
+  if (!selfOk) failures++;
+  say(`${selfOk ? '<span class="pass">PASS</span>' : '<span class="fail">FAIL</span>'} ` +
+      `${'identity TM == 1'.padEnd(22)} ${selfTm.toFixed(12)}`);
+
+  say('');
+  say(`parsed ${native.ca.length} residues, mean pLDDT ${native.meanPlddt.toFixed(4)}, seq starts ${native.sequence.slice(0, 12)}`);
+  say(failures === 0
+    ? '<span class="pass">ALL CHECKS PASSED</span>'
+    : `<span class="fail">${failures} CHECK(S) FAILED</span>`);
+  window.__verify = { failures, done: true };
+} catch (e) {
+  say(`<span class="fail">ERROR</span> ${e.stack || e}`);
+  window.__verify = { failures: -1, done: true };
+}
+</script>
+</body></html>

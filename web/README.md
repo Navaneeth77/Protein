@@ -1,9 +1,10 @@
 # web/ — the deployed demo
 
-This directory is the whole of what gets deployed to Vercel. It is a plain
-static site: no framework, no build step, no npm install. `vercel.json` points
-`outputDirectory` here and `.vercelignore` keeps the Python project out of the
-upload entirely.
+This directory plus `api/fold.mjs` is the whole of what gets deployed to Vercel:
+a static site with no framework, no build step and no npm install, and a single
+dependency-free serverless function that proxies structure prediction.
+`vercel.json` points `outputDirectory` here and `.vercelignore` keeps the Python
+project out of the upload entirely.
 
 It is a replay of the recorded run, plus two things you can actually drive:
 
@@ -15,10 +16,10 @@ It is a replay of the recorded run, plus two things you can actually drive:
   because the interpreter is pure arithmetic over the grounded state. Setting
   the seed policy reproduces round 1 exactly (3 sites, 12 proposals); pressing
   "Apply Gemma's patch" reproduces round 2 (5 sites, 31 proposals).
-- **Score your own sequence** (§5). ESM-2 runs in the browser via
-  transformers.js on `Xenova/esm2_t12_35M_UR50D`, the ONNX export of the same
-  `facebook/esm2_t12_35M_UR50D` the Python path uses. Paste any protein and it
-  gets the identical masked-marginal treatment.
+- **Repair your own protein** (§5). Paste a sequence — protein, or DNA which is
+  translated first — and it is folded, scored residue by residue by ESM-2 running
+  in the browser, repaired, and folded again, with the corrected sequence
+  returned as FASTA. Structure prediction goes through `api/fold.mjs`.
 
 ## Precision is a correctness decision
 
@@ -37,15 +38,52 @@ as a fallback for devices that cannot load fp16, and the page says so when that
 happens. Pre-rank scores cross-checked against Python agree to ~0.006 on a sum
 of 56 log-probabilities, with identical ordering.
 
-## What a pasted sequence does not get
+## Repairing a sequence you supply (§5)
 
-No predicted structure, and therefore no TM-score, no contact recovery and no
-hidden score — all three need a fold plus a reference crystal structure. Folding
-is ESMFold, a different 8.4 GB model. For the same reason the policy search on a
-pasted sequence weights `esm_surprisal` alone: the other three scorable features
-(`low_plddt`, `contact_violation`, `long_range_contact_violation`) are read off a
-predicted structure. The §4 editor has all four because 1PGB's structure is
-committed.
+The full loop on arbitrary input: paste a sequence, it is folded, scored residue
+by residue, repaired, and folded again.
+
+1. **Translate** if the input is DNA/RNA — detected by alphabet and reported,
+   never applied silently. Frame 1, stopping at the first stop codon.
+2. **Fold as given** through `/api/fold`.
+3. **Score** every residue with ESM-2 in the browser (masked marginals, one
+   forward pass per residue).
+4. **Select and substitute** using the ported interpreter: the highest-surprisal
+   positions, each replaced by the residue ESM-2 most expects there. The
+   residue-class filter is off here — reverting damage often has to cross
+   classes, and the informative answer is simply what the model expects.
+5. **Re-score and re-fold** the repaired sequence.
+6. **Compare**: TM-score and RMSD between the two predicted structures (computed
+   in `structure.js`), pLDDT from each fold, and pseudo-log-likelihood from ESM-2.
+
+Output is the modification table and a copyable FASTA.
+
+### The honesty constraint
+
+A sequence supplied by a visitor **has no reference structure**, so there is no
+hidden verifier and nothing is scored against truth — that is exactly what §3's
+withheld evaluator provides for 1PGB and cannot provide here. Only computable
+quantities are reported: sequence likelihood, the model's own confidence, and how
+far the predicted fold moved. A repair that improves all three is a good
+hypothesis, not a verified fix, and the page says so.
+
+Structure prediction is **not** the 8.4 GB checkpoint running on Vercel. It is
+`api/fold.mjs`, a dependency-free proxy to Meta's hosted ESMFold v1 — the browser
+cannot call it directly because ESM Atlas's CORS preflight returns 403. That
+service is free and intermittently unavailable (observed answering the same
+56-residue chain in 2.2 s and then timing out minutes later), so the proxy retries
+three times before giving up, and a fold failure degrades the page rather than
+breaking it: the sequence analysis and the repaired FASTA still appear, without
+the structures.
+
+## Local development
+
+`python -m http.server` cannot serve `/api/fold`, so §5 will not work under it.
+Use the stand-in, which mirrors the Vercel function's contract exactly:
+
+```bash
+python scripts/dev_server.py        # http://localhost:8765
+```
 
 ## Why the real app is not deployed here
 
@@ -110,25 +148,20 @@ sections. Warm that cache once (needs torch + transformers; the scorer is
 ~130 MB, not the 8.4 GB folder), or pass `--allow-missing-esm` to publish a
 reduced bundle deliberately.
 
-## Previewing locally
-
-```bash
-python3 -m http.server 8765 --directory web
-```
-
-Then open <http://localhost:8765>. `fetch()` needs a real HTTP origin, so opening
-`index.html` from the filesystem will not work.
-
 ## Files
 
 ```
 index.html          markup
 styles.css          dark-first theme, light-mode counterpart, no webfonts
-app.js              rendering, 3Dmol viewer, policy editor, sequence input
+app.js              rendering, viewers, policy editor, the repair pipeline
 policy.js           port of the DSL + interpreter; no model, pure arithmetic
 esm.js              in-browser ESM-2 masked-marginal scoring
+structure.js        PDB parsing, Kabsch, TM-score, codon translation
+_verify.html        asserts structure.js agrees with src/geometry.py
 data/demo.json      generated bundle (~98 KB)
 data/structures/    corrupted / baseline / patched predictions + the reference
+
+../api/fold.mjs     the only server-side code: a proxy to hosted ESMFold
 ```
 
 External dependencies, both from CDNs and both degrading with a visible message

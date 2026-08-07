@@ -10,6 +10,7 @@
 
 import * as pol from './policy.js';
 import * as esm from './esm.js';
+import * as st from './structure.js';
 
 const STAGE_COLOUR = {
   corrupted: '#f87171',
@@ -728,291 +729,518 @@ function renderEditor() {
      <code>enumerate_candidates</code> emits. The cheap pre-rank that follows it
      (<code>PLL − λ·edits</code>, keeping the best 3 before folding) is not run
      here: scoring one candidate's PLL costs a fresh masked-marginal pass over
-     the whole sequence, so it is a model call per candidate. It runs in
-     <a href="#own">section 5</a> once the model is loaded.`;
+     the whole sequence, so it is a model call per candidate.
+     <a href="#own">Section 5</a> runs the equivalent on a sequence you supply,
+     and folds the result.`;
 }
 
-/* ================================================================== own sequence */
+/* ================================================================== repair
+ * Paste a sequence -> fold it -> score it -> repair it -> fold it again.
+ *
+ * Structure prediction goes through /api/fold, a thin proxy to Meta's hosted
+ * ESMFold (see api/fold.mjs). Everything else runs here in the browser: ESM-2
+ * scoring via esm.js, position selection and candidate enumeration via the
+ * ported interpreter in policy.js, geometry via structure.js.
+ *
+ * The honesty constraint: a sequence supplied by a visitor has no reference
+ * structure, so there is no hidden verifier and nothing is scored against truth.
+ * Only quantities that are actually computable get reported.
+ * ================================================================== */
 
-const own = { matrix: null, sequence: null, running: false, msPerResidue: null };
+const REPAIR_COLOUR = { given: '#f87171', repaired: '#4ade80' };
 
-/** Human estimate for the pre-rank, calibrated on this device's own throughput
- *  rather than a guess, since it ranges from seconds to minutes. */
-function estimateSeconds(nCandidates, length) {
-  const per = own.msPerResidue || 250;
-  const secs = (nCandidates * length * per) / 1000;
-  if (secs < 90) return `${Math.max(1, Math.round(secs))}s`;
-  const mins = secs / 60;
-  return `${mins < 10 ? mins.toFixed(1) : Math.round(mins)} min`;
+const repair = {
+  running: false,
+  input: null,        // { name, protein, translated }
+  given: null,        // { pdb, parsed, matrix, surprisal, pll }
+  repaired: null,     // { sequence, pdb, parsed, matrix, pll, mutations }
+  tm: null,
+  rmsd: null,
+  view: 'given',
+  overlay: false,
+  viewer: null,
+  foldFailed: null,
+};
+
+async function foldSequence(sequence) {
+  const res = await fetch('api/fold', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sequence }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+/* ------------------------------------------------------------------ input */
+
+function readInput() {
+  const raw = $('seqInput').value;
+  const name = $('protName').value.trim();
+  const nucleotide = st.looksLikeNucleotide(raw);
+
+  let protein = raw;
+  let translated = null;
+  if (nucleotide) {
+    translated = st.translate(raw);
+    protein = translated.protein;
+  }
+  return { name, protein: pol.parseSequence(protein), translated, nucleotide };
+}
+
+function refreshPreview() {
+  const el = $('seqPreview');
+  const raw = $('seqInput').value.trim();
+  if (!raw) { el.innerHTML = ''; return; }
+  try {
+    const inp = readInput();
+    const bits = [`<b>${inp.protein.length}</b> residues`];
+    if (inp.nucleotide) {
+      bits.unshift(
+        `<span class="tag tag-computed sm">translated</span> ${inp.translated.codons} codons` +
+        (inp.translated.stopped ? ' to the first stop codon' : '') +
+        (inp.translated.trailing ? ` · ${inp.translated.trailing} trailing base(s) ignored` : '')
+      );
+    }
+    el.innerHTML = `<span class="ok-text">${bits.join(' · ')}</span>`;
+  } catch (err) {
+    el.innerHTML = `<span class="invalid-text">${err.message}</span>`;
+  }
 }
 
 function initOwnSequence() {
   const d = state.data;
   $('fillCorrupt').addEventListener('click', () => {
+    $('protName').value = 'Protein G domain B1 (damaged)';
     $('seqInput').value = d.stages.corrupted.sequence;
-    setSeqStatus('');
+    refreshPreview();
   });
   $('fillNative').addEventListener('click', () => {
+    $('protName').value = 'Protein G domain B1 (native)';
     $('seqInput').value = d.native.sequence;
-    setSeqStatus('');
+    refreshPreview();
   });
-  $('seqInput').addEventListener('input', () => setSeqStatus(''));
-  $('runEsm').addEventListener('click', runOwnSequence);
+  $('fillDna').addEventListener('click', () => {
+    // Reverse-translated from the corrupted 1PGB sequence with the most common
+    // human codon per residue, so the translated protein is exactly that input.
+    $('protName').value = 'Protein G domain B1 (damaged, as DNA)';
+    $('seqInput').value = backTranslate(d.stages.corrupted.sequence);
+    refreshPreview();
+  });
+  $('seqInput').addEventListener('input', refreshPreview);
+  $('repairCount').addEventListener('input', (e) => {
+    $('repairCountOut').textContent = e.target.value;
+  });
+  $('runRepair').addEventListener('click', runRepair);
 }
 
-function setSeqStatus(msg, kind = '') {
-  $('seqStatus').innerHTML = msg ? `<span class="${kind}">${msg}</span>` : '';
+// One common codon per amino acid — only used to generate the DNA example.
+const BACK = {
+  A: 'GCC', C: 'TGC', D: 'GAC', E: 'GAG', F: 'TTC', G: 'GGC', H: 'CAC',
+  I: 'ATC', K: 'AAG', L: 'CTG', M: 'ATG', N: 'AAC', P: 'CCC', Q: 'CAG',
+  R: 'CGC', S: 'AGC', T: 'ACC', V: 'GTG', W: 'TGG', Y: 'TAC',
+};
+function backTranslate(protein) {
+  return [...protein].map((a) => BACK[a]).join('') + 'TAA';
 }
 
-async function runOwnSequence() {
-  if (own.running) return;
-  let seq;
+/* ------------------------------------------------------------------ pipeline */
+
+function step(label, status = 'run', detail = '') {
+  const list = $('pipeline');
+  list.hidden = false;
+  let li = [...list.children].find((c) => c.dataset.label === label);
+  if (!li) {
+    li = document.createElement('li');
+    li.dataset.label = label;
+    list.appendChild(li);
+  }
+  li.className = `step ${status}`;
+  li.innerHTML = `<span class="step-dot"></span><span class="step-label">${label}</span>` +
+    (detail ? `<span class="step-detail">${detail}</span>` : '');
+  return li;
+}
+
+async function runRepair() {
+  if (repair.running) return;
+
+  let input;
   try {
-    seq = pol.parseSequence($('seqInput').value);
+    input = readInput();
   } catch (err) {
-    setSeqStatus(err.message, 'invalid-text');
+    $('seqStatus').innerHTML = `<span class="invalid-text">${err.message}</span>`;
     return;
   }
 
-  own.running = true;
-  $('runEsm').disabled = true;
-  const bar = $('esmProgress');
-  bar.hidden = false;
-  const fill = bar.querySelector('.progress-bar');
-  fill.style.width = '0%';
+  repair.running = true;
+  repair.foldFailed = null;
+  $('runRepair').disabled = true;
+  $('pipeline').innerHTML = '';
+  $('seqStatus').innerHTML = '';
+  const seq = input.protein;
 
   try {
-    setSeqStatus('loading ESM-2…');
-    await esm.load({ onStatus: (m) => setSeqStatus(m) });
+    // ---- 1. fold as given
+    step('Predicting the structure as given', 'run', 'ESMFold via api.esmatlas.com');
+    let givenFold = null;
+    try {
+      givenFold = await foldSequence(seq);
+      step('Predicting the structure as given', 'done', `${(givenFold.ms / 1000).toFixed(1)}s`);
+    } catch (err) {
+      repair.foldFailed = err.message;
+      step('Predicting the structure as given', 'fail', err.message);
+    }
 
-    setSeqStatus(`scoring ${seq.length} residues — one masked forward pass each…`);
+    // ---- 2. score every residue
+    step('Loading ESM-2', 'run');
+    await esm.load({ onStatus: (m) => step('Loading ESM-2', 'run', m) });
+    step('Loading ESM-2', 'done', esm.precision());
+
+    step('Scoring every residue', 'run', `${seq.length} masked passes`);
     const t0 = performance.now();
     const matrix = await esm.maskedMarginalMatrix(seq, {
-      onProgress: (done, total) => {
-        fill.style.width = `${(done / total) * 100}%`;
-        setSeqStatus(`scoring ${done}/${total} residues…`);
-      },
+      onProgress: (done, total) => step('Scoring every residue', 'run', `${done}/${total}`),
     });
-    const ms = Math.round(performance.now() - t0);
+    const scoreMs = performance.now() - t0;
+    const surprisal = esm.residueSurprisal(seq, matrix);
+    const pllGiven = esm.pseudoLogLikelihood(seq, matrix);
+    step('Scoring every residue', 'done', `${(scoreMs / 1000).toFixed(1)}s`);
 
-    own.sequence = seq;
-    own.matrix = matrix;
-    own.msPerResidue = ms / seq.length;
-    setSeqStatus(`scored ${seq.length} residues in ${(ms / 1000).toFixed(1)}s`, 'ok-text');
-    renderOwnResults(ms);
+    // ---- 3. choose repairs with the real interpreter
+    const nRepairs = Math.min(Number($('repairCount').value), seq.length);
+    step('Selecting sites and substitutions', 'run');
+    const built = pol.buildState(seq, { esm_surprisal: surprisal });
+    // Weighted on the one feature that exists without a structure. The class
+    // filter is off: reverting damage often has to cross residue classes, and
+    // the most informative answer is simply what ESM-2 most expects here.
+    const policy = {
+      position_score: { esm_surprisal: 1.0 },
+      proposal: {
+        positions: nRepairs,
+        substitutions_per_position: 1,
+        preserve_residue_class: false,
+        max_total_edits: nRepairs,
+      },
+    };
+    pol.validatePolicy(policy);
+    const sites = pol.selectPositions(policy, built.state);
+
+    const mutations = [];
+    let repairedSeq = seq;
+    for (const pos of sites) {
+      const [aa, prob] = esm.substitutionRanking(matrix, seq, pos, 1)[0];
+      mutations.push({
+        position: pos,
+        from: seq[pos],
+        to: aa,
+        prob,
+        surprisal: surprisal[pos],
+        incumbentProb: matrix[pos][pol.AA_ALPHABET.indexOf(seq[pos])],
+        label: `${seq[pos]}${pos + 1}${aa}`,
+      });
+      repairedSeq = repairedSeq.slice(0, pos) + aa + repairedSeq.slice(pos + 1);
+    }
+    mutations.sort((a, b) => a.position - b.position);
+    step('Selecting sites and substitutions', 'done',
+      mutations.map((m) => m.label).join(', ') || 'nothing to change');
+
+    // ---- 4. re-score the repaired sequence
+    step('Re-scoring the repaired sequence', 'run');
+    const matrixR = await esm.maskedMarginalMatrix(repairedSeq, {
+      onProgress: (done, total) => step('Re-scoring the repaired sequence', 'run', `${done}/${total}`),
+    });
+    const pllRepaired = esm.pseudoLogLikelihood(repairedSeq, matrixR);
+    step('Re-scoring the repaired sequence', 'done',
+      `log-likelihood ${pllGiven.toFixed(1)} → ${pllRepaired.toFixed(1)}`);
+
+    // ---- 5. fold the repair
+    let repairedFold = null;
+    if (givenFold) {
+      step('Predicting the repaired structure', 'run');
+      try {
+        repairedFold = await foldSequence(repairedSeq);
+        step('Predicting the repaired structure', 'done', `${(repairedFold.ms / 1000).toFixed(1)}s`);
+      } catch (err) {
+        repair.foldFailed = err.message;
+        step('Predicting the repaired structure', 'fail', err.message);
+      }
+    }
+
+    // ---- 6. compare
+    const givenParsed = givenFold ? st.parsePdb(givenFold.pdb) : null;
+    let repairedParsed = repairedFold ? st.parsePdb(repairedFold.pdb) : null;
+    let alignedRepairedPdb = repairedFold ? repairedFold.pdb : null;
+
+    if (givenParsed && repairedParsed && givenParsed.ca.length === repairedParsed.ca.length) {
+      step('Comparing the two structures', 'run');
+      repair.tm = st.tmScore(repairedParsed.ca, givenParsed.ca);
+      repair.rmsd = st.rmsd(repairedParsed.ca, givenParsed.ca);
+      // Put the repair in the given structure's frame so the overlay means
+      // something; ESMFold returns each prediction in its own arbitrary frame.
+      const { R, t } = st.kabsch(repairedParsed.ca, givenParsed.ca);
+      alignedRepairedPdb = st.transformPdb(repairedFold.pdb, R, t);
+      repairedParsed = st.parsePdb(alignedRepairedPdb);
+      step('Comparing the two structures', 'done',
+        `TM ${repair.tm.toFixed(4)} · RMSD ${repair.rmsd.toFixed(2)} Å`);
+    } else {
+      repair.tm = null;
+      repair.rmsd = null;
+    }
+
+    repair.input = input;
+    repair.given = { pdb: givenFold?.pdb ?? null, parsed: givenParsed, matrix, surprisal, pll: pllGiven, sequence: seq };
+    repair.repaired = {
+      sequence: repairedSeq, pdb: alignedRepairedPdb, parsed: repairedParsed,
+      matrix: matrixR, pll: pllRepaired, mutations,
+    };
+
+    renderRepair();
   } catch (err) {
-    setSeqStatus(`failed: ${err.message}`, 'invalid-text');
+    $('seqStatus').innerHTML = `<span class="invalid-text">failed: ${err.message}</span>`;
+    console.error(err);
   } finally {
-    own.running = false;
-    $('runEsm').disabled = false;
-    bar.hidden = true;
+    repair.running = false;
+    $('runRepair').disabled = false;
   }
 }
 
-function renderOwnResults(ms) {
-  const d = state.data;
-  const seq = own.sequence;
-  const matrix = own.matrix;
-  const sur = esm.residueSurprisal(seq, matrix);
+/* ------------------------------------------------------------------ render */
+
+function renderRepair() {
   $('ownResults').hidden = false;
+  renderRepairViewer();
+  renderRepairMetrics();
+  renderRepairSurprisal();
+  renderRepairTable();
+  renderRepairedSequence();
+}
 
-  const prec = esm.precision();
-  const known = { [d.stages.corrupted.sequence]: 'corrupted 1PGB', [d.native.sequence]: 'native 1PGB' };
-  const isKnown = known[seq];
+function renderRepairViewer() {
+  const hasStructures = repair.given?.parsed && repair.repaired?.parsed;
+  const panel = $('repairViewer');
 
-  $('ownProvenance').innerHTML = `
-    <span class="tag tag-computed">computed in your browser</span>
-    <span>${d.esm.browser_model} · ${prec}${prec === 'q8' ? ' (fp16 unavailable here — probabilities are approximate)' : ''}
-    · ${seq.length} residues · ${(ms / 1000).toFixed(1)}s</span>
-    ${isKnown ? `<span class="known-tag">this is the ${isKnown} sequence, so you can compare against the committed PyTorch numbers above</span>` : ''}`;
+  if (!repair.given?.pdb) {
+    panel.innerHTML =
+      `<div class="viewer-fallback">No structure to show — the folding service did not respond.` +
+      `<br /><small>${repair.foldFailed ?? ''}</small><br />` +
+      `The sequence analysis below is unaffected: it runs entirely in this browser.</div>`;
+    $('repairViewerControls').innerHTML = '';
+    $('repairLegend').innerHTML = '';
+    return;
+  }
 
-  // ---- surprisal chart
+  $('repairViewerControls').innerHTML = [
+    ['given', 'as given'],
+    ['repaired', 'repaired'],
+  ].map(([k, label]) =>
+    `<button class="vbtn" data-view="${k}" aria-pressed="${repair.view === k}"
+      ${k === 'repaired' && !repair.repaired?.pdb ? 'disabled' : ''}>${label}</button>`
+  ).join('');
+
+  $('repairViewerControls').onclick = (e) => {
+    const b = e.target.closest('.vbtn');
+    if (!b) return;
+    repair.view = b.dataset.view;
+    [...$('repairViewerControls').children].forEach((c) =>
+      c.setAttribute('aria-pressed', String(c.dataset.view === repair.view))
+    );
+    drawRepairViewer();
+  };
+  $('repairOverlay').disabled = !hasStructures;
+  $('repairOverlay').onchange = (e) => { repair.overlay = e.target.checked; drawRepairViewer(); };
+
+  if (typeof $3Dmol === 'undefined') {
+    panel.innerHTML = '<div class="viewer-fallback">The 3D viewer library could not be loaded.</div>';
+    return;
+  }
+  if (!repair.viewer) {
+    const light = window.matchMedia('(prefers-color-scheme: light)').matches;
+    repair.viewer = $3Dmol.createViewer(panel, { backgroundColor: light ? '#eef2f8' : '#090b0f' });
+  }
+  drawRepairViewer();
+}
+
+function drawRepairViewer() {
+  const v = repair.viewer;
+  if (!v) return;
+  v.clear();
+
+  const models = [];
+  if (repair.overlay && repair.given?.pdb && repair.repaired?.pdb) {
+    models.push(['given', repair.given.pdb], ['repaired', repair.repaired.pdb]);
+  } else if (repair.view === 'repaired' && repair.repaired?.pdb) {
+    models.push(['repaired', repair.repaired.pdb]);
+  } else {
+    models.push(['given', repair.given.pdb]);
+  }
+
+  models.forEach(([key, pdb], i) => {
+    v.addModel(pdb, 'pdb');
+    v.setStyle({ model: i }, { cartoon: { color: REPAIR_COLOUR[key], thickness: 0.9 } });
+  });
+
+  const sites = (repair.repaired?.mutations ?? []).map((m) => m.position + 1);
+  if (sites.length) {
+    v.addStyle({ model: 0, resi: sites },
+      { stick: { radius: 0.18, color: '#fbbf24' }, sphere: { radius: 0.42, color: '#fbbf24' } });
+  }
+  v.zoomTo();
+  v.render();
+
+  $('repairLegend').innerHTML =
+    models.map(([k]) =>
+      `<span><i style="background:${REPAIR_COLOUR[k]}"></i>${k === 'given' ? 'as given' : 'repaired'}</span>`
+    ).join('') +
+    (sites.length ? `<span><i style="background:#fbbf24"></i>modified sites</span>` : '');
+}
+
+function renderRepairMetrics() {
+  const g = repair.given, r = repair.repaired;
+  const delta = (now, was, digits = 4, invert = false) => {
+    const diff = now - was;
+    if (!isFinite(diff) || Math.abs(diff) < 5e-5) return '';
+    const good = invert ? diff < 0 : diff > 0;
+    return `<span class="delta ${good ? 'up' : 'down'}">${diff > 0 ? '+' : ''}${diff.toFixed(digits)}</span>`;
+  };
+
+  const rows = [
+    ['Sequence log-likelihood', r.pll.toFixed(2), delta(r.pll, g.pll, 2)],
+    ['Mean surprisal', (g.surprisal.reduce((s, v) => s + v, 0) / g.surprisal.length).toFixed(3),
+      ''],
+    ['Residues modified', String(r.mutations.length), ''],
+  ];
+  if (g.parsed) rows.push(['Mean pLDDT, as given', g.parsed.meanPlddt.toFixed(4), '']);
+  if (r.parsed) rows.push(['Mean pLDDT, repaired', r.parsed.meanPlddt.toFixed(4),
+    delta(r.parsed.meanPlddt, g.parsed.meanPlddt)]);
+  if (repair.tm != null) rows.push(['TM-score, repaired vs given', repair.tm.toFixed(4), '']);
+  if (repair.rmsd != null) rows.push(['RMSD, repaired vs given', `${repair.rmsd.toFixed(2)} Å`, '']);
+
+  $('repairMetrics').innerHTML = rows
+    .map(([k, v, d]) => `<div><dt>${k}</dt><dd>${v}${d}</dd></div>`).join('');
+
+  const pllUp = r.pll > g.pll;
+  const plddtUp = r.parsed && g.parsed && r.parsed.meanPlddt > g.parsed.meanPlddt;
+  const tmTxt = repair.tm != null
+    ? ` The predicted fold moved by TM ${repair.tm.toFixed(3)} — ${
+        repair.tm > 0.9 ? 'the backbone is essentially unchanged, so this is a local fix'
+        : repair.tm > 0.5 ? 'a substantial rearrangement'
+        : 'a different fold altogether'}.`
+    : '';
+
+  $('repairMetricsNote').innerHTML =
+    `ESM-2 finds the repaired sequence ${pllUp ? '<b>more</b>' : '<b>less</b>'} plausible than the one you gave` +
+    (r.parsed && g.parsed
+      ? `, and ESMFold is ${plddtUp ? '<b>more</b>' : '<b>less</b>'} confident in its structure`
+      : '') +
+    `.${tmTxt} None of this is checked against a true structure — there isn't one for your input.`;
+}
+
+function renderRepairSurprisal() {
+  const seq = repair.given.sequence;
+  const sur = repair.given.surprisal;
+  const modified = new Set(repair.repaired.mutations.map((m) => m.position));
   const n = seq.length;
-  const W = 900, H = 190, PL = 44, PR = 14, PT = 14, PB = 30;
+
+  const W = 900, H = 190, PL = 44, PR = 14, PT = 18, PB = 30;
   const iw = W - PL - PR, ih = H - PT - PB;
-  const hi = Math.max(...sur);
+  const hi = Math.max(...sur) || 1;
   const x = (i) => PL + (n === 1 ? 0 : (i / (n - 1)) * iw);
   const y = (v) => PT + (1 - v / hi) * ih;
-
-  const top = sur.map((v, i) => [v, i]).sort((a, b) => (b[0] - a[0]) || (a[1] - b[1])).slice(0, 5);
-  const topSet = new Map(top.map(([v, i], r) => [i, r + 1]));
 
   const grid = [0, 0.5, 1].map((t) =>
     `<line x1="${PL}" y1="${y(hi * t)}" x2="${W - PR}" y2="${y(hi * t)}" stroke="currentColor" stroke-opacity="0.13" />
      <text x="${PL - 8}" y="${y(hi * t) + 4}" text-anchor="end" font-size="11" fill="currentColor" fill-opacity="0.5">${(hi * t).toFixed(1)}</text>`
   ).join('');
 
+  const bw = Math.max(1.5, (iw / n) * 0.8);
   const bars = sur.map((v, i) =>
-    `<rect x="${x(i) - Math.max(1, iw / n / 2)}" y="${y(v)}" width="${Math.max(1.5, iw / n * 0.8)}" height="${PT + ih - y(v)}"
-           fill="${topSet.has(i) ? '#f87171' : 'currentColor'}" fill-opacity="${topSet.has(i) ? 0.95 : 0.42}" />`
+    `<rect x="${x(i) - bw / 2}" y="${y(v)}" width="${bw}" height="${PT + ih - y(v)}"
+       fill="${modified.has(i) ? '#4ade80' : 'currentColor'}" fill-opacity="${modified.has(i) ? 0.95 : 0.4}" />`
   ).join('');
 
-  const labels = [...topSet.entries()].map(([i, r]) =>
-    `<text x="${x(i)}" y="${y(sur[i]) - 5}" text-anchor="middle" font-size="10.5" fill="#f87171" font-weight="600">${seq[i]}${i + 1}</text>`
+  const labels = [...modified].map((i) =>
+    `<text x="${x(i)}" y="${y(sur[i]) - 5}" text-anchor="middle" font-size="10.5" fill="#4ade80" font-weight="600">${seq[i]}${i + 1}</text>`
   ).join('');
 
   const ticks = [1, ...Array.from({ length: 5 }, (_, k) => Math.round(((k + 1) * n) / 5))]
-    .filter((v, idx, arr) => arr.indexOf(v) === idx)
+    .filter((v, i, a) => a.indexOf(v) === i)
     .map((p) => `<text x="${x(p - 1)}" y="${H - 9}" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity="0.5">${p}</text>`)
     .join('');
 
   $('ownSurprisal').innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Per-residue ESM-2 surprisal">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Per-residue ESM-2 surprisal of the sequence as given">
       <g color="var(--ink)">${grid}${bars}${labels}${ticks}</g>
     </svg>
-    <p class="metrics-note">Five most surprising positions in red:
-      <b>${top.map(([, i]) => `${seq[i]}${i + 1}`).join(', ')}</b>.</p>`;
-
-  // ---- heatmap (canvas: 20 x L cells)
-  const cw = Math.max(6, Math.min(18, Math.floor(1000 / n)));
-  const ch = 15;
-  const cvs = document.createElement('canvas');
-  cvs.width = n * cw; cvs.height = 20 * ch;
-  cvs.style.width = `${n * cw}px`; cvs.style.height = `${20 * ch}px`;
-  const ctx = cvs.getContext('2d');
-  for (let i = 0; i < n; i++) {
-    for (let k = 0; k < 20; k++) {
-      const p = matrix[i][k];
-      const t = Math.min(1, Math.sqrt(p));
-      ctx.fillStyle = `rgba(94, 176, 239, ${0.06 + t * 0.94})`;
-      ctx.fillRect(i * cw, k * ch, cw, ch);
-      if (pol.AA_ALPHABET[k] === seq[i]) {
-        ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5;
-        ctx.strokeRect(i * cw + 0.75, k * ch + 0.75, cw - 1.5, ch - 1.5);
-      }
-    }
-  }
-  const rowLabels = [...pol.AA_ALPHABET].map((aa) => `<div style="height:${ch}px">${aa}</div>`).join('');
-  $('ownHeatmap').innerHTML =
-    `<div class="heatmap"><div class="heatmap-rows">${rowLabels}</div><div class="heatmap-canvas"></div></div>`;
-  $('ownHeatmap').querySelector('.heatmap-canvas').appendChild(cvs);
-
-  $('heatmapCaption').textContent = d.heatmap_caption || HEATMAP_CAPTION;
-
-  // ---- policy search on this sequence (ESM feature only)
-  renderOwnSearch(seq, matrix, sur);
+    <p class="metrics-note">Green bars are the positions selected for repair.</p>`;
 }
 
-// Kept verbatim from app/streamlit_app.py's HEATMAP_CAPTION — the honest-labelling
-// contract asserted by tests/test_ui.py. It must keep saying what it does not do.
-const HEATMAP_CAPTION =
-  'Per-position ESM-2 masked-marginal substitution probabilities. This is an ' +
-  'approximation of a geometry-inspired local mutation map, not an ' +
-  'implementation of one: no tangent space and no decoder derivative is ' +
-  'computed anywhere in this system. Red outline marks the residue actually present.';
+function renderRepairTable() {
+  const muts = repair.repaired.mutations;
+  if (!muts.length) {
+    $('repairTable').innerHTML = '<p class="metrics-note">No modifications proposed.</p>';
+    return;
+  }
+  $('repairTable').innerHTML = `
+    <table class="data">
+      <caption>Chosen by the ported interpreter: the highest-surprisal positions, each
+        replaced by the residue ESM-2 most expects there.</caption>
+      <thead><tr>
+        <th>Position</th><th>From</th><th>To</th>
+        <th>Surprisal</th><th>p(current)</th><th>p(proposed)</th>
+      </tr></thead>
+      <tbody>${muts.map((m) => `<tr>
+        <td class="pos">${m.position + 1}</td>
+        <td><span class="from">${m.from}</span></td>
+        <td><span class="to" style="color:var(--good)">${m.to}</span></td>
+        <td>${m.surprisal.toFixed(2)}</td>
+        <td>${(m.incumbentProb * 100).toFixed(1)}%</td>
+        <td>${(m.prob * 100).toFixed(1)}%</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+}
 
-function renderOwnSearch(seq, matrix, sur) {
-  const d = state.data;
-  const built = pol.buildState(seq, { esm_surprisal: sur });
-  const policy = {
-    position_score: { esm_surprisal: 1.0 },
-    proposal: { ...d.policy.seed.proposal },
-  };
+function renderRepairedSequence() {
+  const given = repair.given.sequence;
+  const rep = repair.repaired.sequence;
+  const name = repair.input.name || 'repaired sequence';
 
-  const render = () => {
-    let cands, sites;
+  const track = [...rep].map((aa, i) =>
+    `<span class="res ${aa !== given[i] ? 'good' : ''}" data-pos="${aa}${i + 1}">${aa}</span>`
+  ).join('');
+
+  const fasta = `>${name} | ReFold repair | ${repair.repaired.mutations.map((m) => m.label).join(',')}\n` +
+    (rep.match(/.{1,60}/g) || []).join('\n');
+
+  $('repairedSeq').innerHTML = `
+    <div class="seq-block">
+      <div class="seq-row">
+        <div class="seq-label">as given<span class="seq-note">your input</span></div>
+        <div class="seq">${[...given].map((aa, i) =>
+          `<span class="res ${aa !== rep[i] ? 'bad' : ''}" data-pos="${aa}${i + 1}">${aa}</span>`).join('')}</div>
+      </div>
+      <div class="seq-row">
+        <div class="seq-label">repaired<span class="seq-note">${repair.repaired.mutations.length} substitution(s)</span></div>
+        <div class="seq">${track}</div>
+      </div>
+    </div>
+    <div class="fasta-out">
+      <div class="fasta-head">
+        <span>FASTA</span>
+        <button class="btn tiny" id="copyFasta">Copy</button>
+      </div>
+      <pre id="fastaBody">${fasta}</pre>
+    </div>`;
+
+  $('copyFasta').addEventListener('click', async () => {
     try {
-      pol.validatePolicy(policy);
-      sites = pol.selectPositions(policy, built.state);
-      cands = pol.enumerateCandidates(policy, built.state, seq, (s, p, n) =>
-        esm.substitutionRanking(matrix, s, p, n)
-      );
-    } catch (err) {
-      $('ownSearch').innerHTML = `<div class="invalid">${err.message}</div>`;
-      return;
+      await navigator.clipboard.writeText(fasta);
+      $('copyFasta').textContent = 'Copied';
+      setTimeout(() => ($('copyFasta').textContent = 'Copy'), 1500);
+    } catch {
+      $('copyFasta').textContent = 'Select it manually';
     }
-
-    $('ownSearch').innerHTML = `
-      <aside class="notice compact">
-        <p><strong>Weighted on ESM surprisal alone.</strong> The other three
-        scorable features — <code>low_plddt</code>, <code>contact_violation</code>,
-        <code>long_range_contact_violation</code> — are read off a
-        <em>predicted structure</em>, and your sequence does not have one here.
-        So this is the real interpreter on a genuinely reduced state, not the
-        full policy. The 1PGB editor in <a href="#editor">section 4</a> has all
-        four, because that structure is committed.</p>
-      </aside>
-      <div class="own-controls">
-        <label>positions <input type="range" id="own_pos" min="1" max="10" step="1" value="${policy.proposal.positions}" /><output>${policy.proposal.positions}</output></label>
-        <label>subs/position <input type="range" id="own_spp" min="1" max="19" step="1" value="${policy.proposal.substitutions_per_position}" /><output>${policy.proposal.substitutions_per_position}</output></label>
-        <label class="toggle"><input type="checkbox" id="own_class" ${policy.proposal.preserve_residue_class ? 'checked' : ''} /><span>preserve residue class</span></label>
-      </div>
-      <div class="result-summary"><b>${sites.length}</b> sites · <b>${cands.length}</b> mutations proposed</div>
-      <div class="candidate-list">${sites.map((p) => {
-        const list = cands.filter((c) => c.position === p);
-        return `<div class="cand-group">
-          <div class="cand-head"><span class="cand-pos">${seq[p]}${p + 1}</span>
-          <span class="cand-meta">surprisal ${sur[p].toFixed(2)} · ${list.length} substitution${list.length === 1 ? '' : 's'}</span></div>
-          <div class="cand-chips">${list.length
-            ? list.map((c) => `<span class="chip">${c.label}<i>${(c.substitution_prob * 100).toFixed(1)}%</i></span>`).join('')
-            : '<span class="chip empty">none survive the class filter</span>'}</div>
-        </div>`;
-      }).join('')}</div>
-      <div class="prerank-row">
-        <button class="btn" id="runPrerank"${cands.length ? '' : ' disabled'}>Run the PLL pre-rank shortlist</button>
-        <span class="prerank-note">This is the step that picks which few get
-          folded. It costs one masked-marginal pass <em>per candidate</em> —
-          ${cands.length} × ${seq.length} = ${(cands.length * seq.length).toLocaleString()}
-          forward passes, roughly
-          <b>${estimateSeconds(cands.length, seq.length)}</b> at the rate this
-          device just scored. Lower <em>positions</em> or
-          <em>subs/position</em> above to shorten it.</span>
-      </div>
-      <div id="prerankOut"></div>`;
-
-    const wire = (id, key, out) => {
-      const el = $(id);
-      el.addEventListener('input', () => {
-        policy.proposal[key] = Number(el.value);
-        render();
-      });
-    };
-    wire('own_pos', 'positions');
-    wire('own_spp', 'substitutions_per_position');
-    $('own_class').addEventListener('change', (e) => {
-      policy.proposal.preserve_residue_class = e.target.checked;
-      render();
-    });
-    $('runPrerank').addEventListener('click', () => runPrerank(cands, seq));
-  };
-  render();
-}
-
-async function runPrerank(cands, seq) {
-  const btn = $('runPrerank');
-  const out = $('prerankOut');
-  if (!cands.length) { out.innerHTML = '<p class="metrics-note">No candidates to rank.</p>'; return; }
-  btn.disabled = true;
-  out.innerHTML = '<p class="metrics-note">scoring 0/' + cands.length + '…</p>';
-  try {
-    const shortlist = await pol.prerankCandidates(
-      cands,
-      async (s) => {
-        const m = await esm.maskedMarginalMatrix(s);
-        return esm.pseudoLogLikelihood(s, m);
-      },
-      pol.SHORTLIST_SIZE,
-      pol.EDIT_PENALTY_LAMBDA,
-      (done, total) => { out.innerHTML = `<p class="metrics-note">scoring ${done}/${total}…</p>`; }
-    );
-    out.innerHTML = `
-      <div class="shortlist">
-        <div class="shortlist-head">Shortlist — the ${shortlist.length} that would be folded</div>
-        ${shortlist.map((c, i) => `<div class="shortlist-row">
-          <span class="rank">${i + 1}</span>
-          <span class="chip">${c.label}</span>
-          <span class="sl-score">PLL − λ·edits = <b>${c.prerank_score.toFixed(3)}</b></span>
-        </div>`).join('')}
-        <p class="metrics-note">λ = ${pol.EDIT_PENALTY_LAMBDA}, so a tie in
-        plausibility resolves toward fewer edits. In the full pipeline
-        ${shortlist.length === 1 ? 'this is the candidate' : `these ${shortlist.length} are what`}
-        ESMFold actually predicts, and only then does the hidden evaluator see them.</p>
-      </div>`;
-  } catch (err) {
-    out.innerHTML = `<p class="invalid-text">failed: ${err.message}</p>`;
-  } finally {
-    btn.disabled = false;
-  }
+  });
 }
 
 // Module scripts are deferred, so DOMContentLoaded may already have fired by the

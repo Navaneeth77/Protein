@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "echo 'no dependencies to install'",
-  "buildCommand": "echo 'static site — web/ is served as-is'",
+  "buildCommand": "echo 'static site \u2014 web/ is served as-is'",
   "outputDirectory": "web",
   "cleanUrls": true,
   "trailingSlash": false,
@@ -10,22 +10,42 @@
     {
       "source": "/data/structures/(.*).pdb",
       "headers": [
-        { "key": "Content-Type", "value": "chemical/x-pdb; charset=utf-8" },
-        { "key": "Cache-Control", "value": "public, max-age=3600, must-revalidate" }
+        {
+          "key": "Content-Type",
+          "value": "chemical/x-pdb; charset=utf-8"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600, must-revalidate"
+        }
       ]
     },
     {
       "source": "/data/demo.json",
       "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=3600, must-revalidate" }
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600, must-revalidate"
+        }
       ]
     },
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/fold.mjs": {
+      "maxDuration": 60
+    }
+  }
 }

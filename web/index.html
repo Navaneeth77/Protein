@@ -244,54 +244,89 @@
 
   <!-- ------------------------------------------------------------------ -->
   <section id="own">
-    <h2><span class="num">5</span> Score your own sequence</h2>
+    <h2><span class="num">5</span> Repair your own protein</h2>
     <p class="section-lede">
-      ESM-2 runs <strong>in your browser</strong> — the ONNX build of
-      <code>facebook/esm2_t12_35M_UR50D</code>, the same scorer the Python path
-      uses. Paste any protein and it gets the identical masked-marginal
-      treatment that flagged the fold-breaking proline at position 50 without
-      ever seeing a reference structure.
+      Paste a sequence. It gets folded, scored residue by residue, and repaired
+      by the same policy the agent uses — then folded again so you can see what
+      the repair did to the structure. Nucleotide input is translated first.
     </p>
 
-    <aside class="notice compact">
+    <div class="own-input">
+      <div class="field-row">
+        <div class="field">
+          <label for="protName">Protein name or type <span class="hint">optional, for labelling only</span></label>
+          <input type="text" id="protName" placeholder="e.g. Protein G domain B1" spellcheck="false" />
+        </div>
+      </div>
+      <label for="seqInput" class="own-label">
+        Sequence — amino acids, or DNA/RNA which will be translated
+        <span class="hint">10–400 residues</span>
+      </label>
+      <textarea id="seqInput" spellcheck="false" rows="4"
+        placeholder="MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"></textarea>
+      <div id="seqPreview" class="seq-preview"></div>
+
+      <div class="own-actions">
+        <button class="btn" id="fillCorrupt">Load damaged 1PGB</button>
+        <button class="btn" id="fillNative">Load healthy 1PGB</button>
+        <button class="btn" id="fillDna">Load a DNA example</button>
+        <label class="repairs-ctl">repairs to apply
+          <input type="range" id="repairCount" min="1" max="5" step="1" value="3" />
+          <output id="repairCountOut">3</output>
+        </label>
+        <button class="btn primary" id="runRepair">Diagnose &amp; repair</button>
+      </div>
+
+      <div id="seqStatus" class="seq-status"></div>
+      <ol id="pipeline" class="pipeline" hidden></ol>
+    </div>
+
+    <aside class="notice compact" id="ownCaveat">
       <p>
-        <strong>What this does not do.</strong> It does not predict a structure.
-        Folding is ESMFold, a different 8.4&nbsp;GB model, so a sequence you paste
-        gets sequence-plausibility signals and the policy search that runs on
-        them — and no TM-score, no contact recovery and no hidden score, because
-        all three require a fold and a reference crystal structure to score
-        against. Those exist on this page only for 1PGB, where both are committed.
+        <strong>What this can and cannot tell you.</strong> There is no reference
+        structure for a protein you supply, so nothing here is scored against
+        ground truth — that is the whole point of the hidden verifier in
+        <a href="#loop">section 3</a>, and it does not exist for your input. What
+        you get is honest and limited: where ESM-2 finds the chain implausible,
+        what substitutions it prefers there, how sequence likelihood and the
+        model's own confidence move, and how far the predicted structure shifts.
+        A repair that raises all three is a good hypothesis, not a verified fix.
       </p>
     </aside>
 
-    <div class="own-input">
-      <label for="seqInput" class="own-label">Protein sequence (FASTA or raw, 10–400 residues)</label>
-      <textarea id="seqInput" spellcheck="false" rows="4"
-        placeholder="MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"></textarea>
-      <div class="own-actions">
-        <button class="btn" id="fillCorrupt">Use corrupted 1PGB</button>
-        <button class="btn" id="fillNative">Use native 1PGB</button>
-        <button class="btn primary" id="runEsm">Run ESM-2</button>
-      </div>
-      <div id="seqStatus" class="seq-status"></div>
-      <div id="esmProgress" class="progress" hidden><div class="progress-bar"></div></div>
-    </div>
-
     <div id="ownResults" hidden>
-      <div id="ownProvenance" class="own-provenance"></div>
-      <h3 class="mt">Per-residue surprisal</h3>
+      <div class="repair-grid">
+        <div class="viewer-panel">
+          <div class="viewer-controls" id="repairViewerControls"></div>
+          <div id="repairViewer" class="viewer"></div>
+          <div class="viewer-foot">
+            <label class="toggle">
+              <input type="checkbox" id="repairOverlay" />
+              <span>Overlay both structures</span>
+            </label>
+            <div class="viewer-legend" id="repairLegend"></div>
+          </div>
+        </div>
+
+        <div class="metrics-panel">
+          <h3>Before and after</h3>
+          <dl class="metrics" id="repairMetrics"></dl>
+          <p class="metrics-note" id="repairMetricsNote"></p>
+        </div>
+      </div>
+
+      <h3 class="mt">What ESM-2 thinks is wrong</h3>
       <p class="section-lede">
-        −log p of the residue actually present, under the masked-marginal
-        estimator. High means "the model did not expect this residue here".
+        Per-residue surprisal of the sequence as given. Tall bars are residues
+        the model did not expect in that context.
       </p>
       <div id="ownSurprisal" class="plddt-chart"></div>
 
-      <h3 class="mt">Substitution map</h3>
-      <p class="section-lede" id="heatmapCaption"></p>
-      <div id="ownHeatmap" class="heatmap-wrap"></div>
+      <h3 class="mt">Proposed modifications</h3>
+      <div id="repairTable"></div>
 
-      <h3 class="mt">Policy search on your sequence</h3>
-      <div id="ownSearch"></div>
+      <h3 class="mt">Repaired sequence</h3>
+      <div id="repairedSeq"></div>
     </div>
   </section>
 

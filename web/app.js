@@ -926,6 +926,18 @@ async function runRepair() {
     pol.validatePolicy(policy);
     const sites = pol.selectPositions(policy, built.state);
 
+    // How far each site stands out from this chain's own surprisal spread. It is
+    // reported rather than thresholded on: measured against 1PGB, where the five
+    // lesions are known, only one (P50, z=3.25) is a strong outlier and the other
+    // four sit at z=0.97-1.80 — indistinguishable from healthy ubiquitin's K63 at
+    // z=2.71. Surprising is not the same as damaged, so the page shows the number
+    // and lets the reader judge.
+    const sMean = surprisal.reduce((s, v) => s + v, 0) / surprisal.length;
+    const sStd = Math.sqrt(
+      surprisal.reduce((s, v) => s + (v - sMean) ** 2, 0) / surprisal.length
+    ) || 1e-9;
+    const zOf = (i) => (surprisal[i] - sMean) / sStd;
+
     const mutations = [];
     let repairedSeq = seq;
     for (const pos of sites) {
@@ -936,6 +948,7 @@ async function runRepair() {
         to: aa,
         prob,
         surprisal: surprisal[pos],
+        z: zOf(pos),
         incumbentProb: matrix[pos][pol.AA_ALPHABET.indexOf(seq[pos])],
         label: `${seq[pos]}${pos + 1}${aa}`,
       });
@@ -1009,11 +1022,72 @@ async function runRepair() {
 
 function renderRepair() {
   $('ownResults').hidden = false;
+  renderDamageVerdict();
   renderRepairViewer();
   renderRepairMetrics();
   renderRepairSurprisal();
   renderRepairTable();
   renderRepairedSequence();
+}
+
+/**
+ * Does this chain actually look damaged?
+ *
+ * Deliberately not a verdict. Measured on the one case with known ground truth
+ * (1PGB corrupt_01, five deliberate lesions) against two healthy chains:
+ *
+ *                          PLL/residue   max z   z>=2   z>=3
+ *   ubiquitin, healthy        -1.461      2.71     2      0
+ *   1PGB native, healthy      -1.956      2.42     3      0
+ *   1PGB corrupted            -2.336      3.25     1      1
+ *
+ * Absolute likelihood does not separate them: healthy ubiquitin scores better
+ * than healthy 1PGB by more than corruption costs 1PGB. Nor does the count of
+ * outliers — the damaged chain has the FEWEST residues at z>=2, because one
+ * large outlier inflates the standard deviation. And four of the five real
+ * lesions sit at z=0.97-1.80, well inside the range healthy proteins occupy.
+ *
+ * So the page reports the evidence and its limits instead of classifying.
+ */
+function renderDamageVerdict() {
+  const muts = repair.repaired.mutations;
+  const g = repair.given;
+  const n = g.sequence.length;
+  const perResidue = g.pll / n;
+  const maxZ = muts.length ? Math.max(...muts.map((m) => m.z)) : 0;
+  const strong = muts.filter((m) => m.z >= 3);
+
+  const headline = strong.length
+    ? `<strong>${strong.map((m) => `${m.from}${m.position + 1}`).join(', ')}</strong> ` +
+      `stand${strong.length === 1 ? 's' : ''} out sharply from the rest of this chain ` +
+      `(z ≥ 3). On the one protein here with known lesions, that was the signature of ` +
+      `real damage.`
+    : `<strong>Nothing in this chain stands out sharply.</strong> The most unexpected ` +
+      `residue sits at z = ${maxZ.toFixed(2)}, inside the range healthy proteins occupy ` +
+      `— wild-type ubiquitin reaches z = 2.71 and native 1PGB z = 2.42 with nothing ` +
+      `wrong with either.`;
+
+  $('damageVerdict').innerHTML = `
+    <aside class="notice compact verdict">
+      <p>${headline}</p>
+      <p>
+        The substitutions below are simply the least-expected residues and the model's
+        preferred replacements. <strong>They are proposals, not findings.</strong> This
+        tool always returns as many as you ask for, whether or not anything is wrong,
+        and a high surprisal marks a residue that is <em>rare</em> — which is also what
+        a conserved functional site looks like. Ubiquitin's K63, the attachment point
+        for K63-linked signalling chains, is the single most surprising residue in that
+        protein and must not be changed.
+      </p>
+      <p class="verdict-stats">
+        mean log-likelihood per residue <b>${perResidue.toFixed(3)}</b> ·
+        surprisal mean <b>${(g.surprisal.reduce((s, v) => s + v, 0) / n).toFixed(2)}</b> ·
+        highest z among proposals <b>${maxZ.toFixed(2)}</b>
+        <br />Per-residue likelihood is not comparable between different proteins:
+        healthy ubiquitin scores −1.46 and healthy 1PGB −1.96, a bigger gap than the
+        −0.38 that five deliberate lesions cost 1PGB.
+      </p>
+    </aside>`;
 }
 
 function renderRepairViewer() {
@@ -1184,16 +1258,20 @@ function renderRepairTable() {
   $('repairTable').innerHTML = `
     <table class="data">
       <caption>Chosen by the ported interpreter: the highest-surprisal positions, each
-        replaced by the residue ESM-2 most expects there.</caption>
+        replaced by the residue ESM-2 most expects there. <b>z</b> is how far the site
+        stands out from this chain's own spread — below 3, it is within the range
+        healthy proteins reach.</caption>
       <thead><tr>
         <th>Position</th><th>From</th><th>To</th>
-        <th>Surprisal</th><th>p(current)</th><th>p(proposed)</th>
+        <th>Surprisal</th><th title="standard deviations above this chain's own mean surprisal">z</th>
+        <th>p(current)</th><th>p(proposed)</th>
       </tr></thead>
       <tbody>${muts.map((m) => `<tr>
         <td class="pos">${m.position + 1}</td>
         <td><span class="from">${m.from}</span></td>
         <td><span class="to" style="color:var(--good)">${m.to}</span></td>
         <td>${m.surprisal.toFixed(2)}</td>
+        <td class="${m.z >= 3 ? 'z-strong' : ''}">${m.z.toFixed(2)}</td>
         <td>${(m.incumbentProb * 100).toFixed(1)}%</td>
         <td>${(m.prob * 100).toFixed(1)}%</td>
       </tr>`).join('')}</tbody>
